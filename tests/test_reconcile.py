@@ -11,6 +11,19 @@ from argus.core.models import Posting
 from argus.feed import jobs, reconcile
 
 
+@pytest.fixture(autouse=True)
+def _store_everything(monkeypatch):
+    """These tests exercise the diff, not the ruleset.
+
+    Ingest filtering is on by default in production, but coupling a test
+    about board isolation or reopen-versus-edit ordering to whether its
+    fixture titles happen to look technical would make the diff's tests fail
+    for reasons that have nothing to do with the diff. The filter has its
+    own tests below.
+    """
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", False)
+
+
 @pytest.fixture()
 def conn(tmp_path):
     c = db.init_db(tmp_path / "t.db")
@@ -308,3 +321,67 @@ def test_one_oversized_board_goes_alone_rather_than_being_split(conn, monkeypatc
     huge = [b for b in seen if any(v >= 500 for v in b.values())]
     assert huge, "the oversized board was never flushed"
     assert all(len(b) == 1 for b in huge), "it must travel alone, and whole"
+
+
+"""
+Ingest filtering. The corpus is 82% retail, clinical and sales work, so what
+is never stored matters as much as what is.
+"""
+
+
+def test_non_technical_postings_are_never_stored(conn, monkeypatch):
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
+    res = reconcile.apply_board(
+        conn,
+        "ashby",
+        "acme",
+        [
+            post("a", title="Senior Backend Engineer"),
+            post("b", title="Retail Sales Associate"),
+            post("c", title="Machine Learning Engineer"),
+            post("d", title="Delivery Driver"),
+            post("e", title="Registered Nurse"),
+        ],
+    )
+    stored = [r["title"] for r in conn.execute("SELECT title FROM jobs ORDER BY external_id")]
+    assert stored == ["Senior Backend Engineer", "Machine Learning Engineer"]
+    assert res.new == 2
+
+
+def test_the_guard_judges_the_fetch_not_the_filter(conn, monkeypatch):
+    """A retail board can return five hundred postings of which none are
+    technical. Staging zero rows is the correct outcome, not evidence of a
+    broken response -- and judging the fetch by the filtered count would mark
+    every such board suspicious on every poll."""
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
+    monkeypatch.setattr(config, "MASS_CLOSE_GUARD", 2)
+
+    reconcile.apply_board(conn, "ashby", "acme", [post(f"e{i}") for i in range(5)])
+    assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 5
+
+    """A healthy fetch that happens to contain no technical roles."""
+    res = reconcile.apply_board(
+        conn, "ashby", "acme", [post(f"r{i}", title="Cashier") for i in range(40)]
+    )
+    assert not res.suspicious, "a full fetch of retail roles is not a bad response"
+
+
+def test_an_empty_fetch_is_still_suspicious(conn, monkeypatch):
+    """The guard must keep working: nothing returned at all, on a board that
+    held many, is still a bad response."""
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
+    monkeypatch.setattr(config, "MASS_CLOSE_GUARD", 2)
+    reconcile.apply_board(conn, "ashby", "acme", [post(f"e{i}") for i in range(5)])
+    res = reconcile.apply_board(conn, "ashby", "acme", [])
+    assert res.suspicious
+    assert (
+        conn.execute("SELECT COUNT(*) n FROM jobs WHERE status='open'").fetchone()["n"] == 5
+    ), "a suspect board closes nothing"
+
+
+def test_filtering_can_be_turned_off(conn, monkeypatch):
+    """The trade is real -- an unstored posting can never be reclassified --
+    so it is a setting rather than a constant."""
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", False)
+    reconcile.apply_board(conn, "ashby", "acme", [post("a", title="Retail Sales Associate")])
+    assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 1

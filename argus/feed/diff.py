@@ -36,6 +36,7 @@ CREATE TEMP TABLE IF NOT EXISTS staged_boards (
     ats        TEXT NOT NULL,
     slug       TEXT NOT NULL,
     suspicious SMALLINT NOT NULL DEFAULT 0,
+    fetched    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (ats, slug)
 )
 """
@@ -65,13 +66,17 @@ One row per board in the batch: how many postings it holds open, and how many
 the fetch returned. A board that held many and returned none is a bad
 response, not a mass layoff -- and answering that costs two integers per
 board rather than a read of every posting on it.
+
+`present` counts what the fetch returned, not what was staged. Those differ
+once ingest filtering is on: a retail board can return five hundred postings
+of which none are technical, and staging zero rows is the correct outcome
+rather than evidence of a broken response. Judging the fetch by the filtered
+count would mark every such board suspicious on every poll.
 """
 GUARD = """
-SELECT b.ats, b.slug,
+SELECT b.ats, b.slug, b.fetched AS present,
        (SELECT COUNT(*) FROM jobs j
-        WHERE j.ats=b.ats AND j.slug=b.slug AND j.status='open') AS open_before,
-       (SELECT COUNT(*) FROM staged_postings s
-        WHERE s.ats=b.ats AND s.slug=b.slug) AS present
+        WHERE j.ats=b.ats AND j.slug=b.slug AND j.status='open') AS open_before
 FROM staged_boards b
 """
 
@@ -154,6 +159,21 @@ RETURNING ats, slug, external_id, title, url, location, missing_polls, status
 
 Key = tuple[str, str]
 
+"""
+Postings dropped at ingest, so a run can report what it chose not to store.
+Module state because the diff is called per batch and the count belongs to
+the run.
+"""
+_last_skipped = [0]
+
+
+def skipped_count() -> int:
+    return _last_skipped[0]
+
+
+def reset_skipped() -> None:
+    _last_skipped[0] = 0
+
 
 def _reset(conn) -> None:
     conn.execute(BOARDS_DDL)
@@ -163,14 +183,34 @@ def _reset(conn) -> None:
 
 
 def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
+    """
+    The board row carries the raw fetch count, because the guard judges the
+    response and the filter judges the posting -- two different questions.
+    """
     conn.executemany(
-        "INSERT INTO staged_boards (ats, slug) VALUES (?,?) ON CONFLICT DO NOTHING",
-        list(fetched),
+        "INSERT INTO staged_boards (ats, slug, fetched) VALUES (?,?,?) ON CONFLICT DO NOTHING",
+        [(a, s, len(p)) for (a, s), p in fetched.items()],
     )
     rows = []
+    skipped = 0
     for (ats, slug), postings in fetched.items():
         for p in postings:
             role = classify(p.title, p.department)
+            """
+            Filtered here rather than after storing, because the corpus is
+            82% retail, clinical and sales work that the product never serves
+            -- 725,539 postings of a 500 MB budget spent on Domino's cashiers.
+
+            The cost is that a posting we never store can never be
+            reclassified: a later ruleset that catches something this one
+            missed only applies to postings arriving after it. That is
+            acceptable because every live board is re-polled hourly, so a
+            broadened ruleset recovers its misses within a day -- but it is a
+            real trade, which is why it is a setting rather than a constant.
+            """
+            if config.STORE_ONLY_TECHNICAL and not (role.is_engineering or role.is_fde):
+                skipped += 1
+                continue
             rows.append(
                 (
                     ats,
@@ -189,6 +229,8 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
                     role.ruleset,
                 )
             )
+    if skipped:
+        _last_skipped[0] += skipped
     if rows:
         conn.executemany(
             """INSERT INTO staged_postings

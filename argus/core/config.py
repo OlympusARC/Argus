@@ -83,6 +83,22 @@ many open jobs, treat it as suspect and skip the close pass.
 MASS_CLOSE_GUARD = int(os.getenv("ARGUS_MASS_CLOSE_GUARD", "5"))
 
 """
+Store only what the product serves.
+
+The corpus is 82% retail, clinical and sales work -- 725,539 postings of a
+500 MB budget spent on store associates and delivery drivers that no query
+ever asks for. Filtering at ingest is the difference between 609 MB and
+115 MB.
+
+The cost: a posting that is never stored can never be reclassified, so a
+later ruleset only improves what arrives after it. Every live board is
+re-polled hourly, so a broadened ruleset recovers its misses within a day --
+but set this to 0 before a ruleset change if you want the old corpus
+re-labelled rather than re-fetched.
+"""
+STORE_ONLY_TECHNICAL = os.getenv("ARGUS_STORE_ONLY_TECHNICAL", "1") not in ("0", "false", "")
+
+"""
 Rows a single diff batch may stage. The board count alone is the wrong
 bound: a hundred Workday boards stages 181,401 postings where a hundred
 Ashby boards stages 1,700, and the first exceeds Postgres's two-minute
