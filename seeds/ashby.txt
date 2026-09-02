@@ -1,0 +1,13 @@
+# Manual escape hatch for Ashby boards no automated source reaches -- one slug
+# or full URL per line, `#` comments. `validate` discards anything that does
+# not resolve, so add freely.
+#
+# Intentionally empty. Twice now a curated list here has turned out to be
+# redundant: the first was copied from Common Crawl output, and the eleven
+# entries that replaced it are already supplied by the ashby_customers source.
+# Both scored zero boards that no other source found. Add a slug only when
+# discovery genuinely misses it.
+#
+# example:
+#   acme-robotics
+#   https://jobs.ashbyhq.com/acme-robotics
