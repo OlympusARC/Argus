@@ -57,6 +57,7 @@ CREATE TEMP TABLE IF NOT EXISTS staged_postings (
     is_fde          SMALLINT,
     seniority       TEXT,
     classified_by   TEXT,
+    region          TEXT,
     PRIMARY KEY (ats, slug, external_id)
 )
 """
@@ -83,10 +84,11 @@ FROM staged_boards b
 INSERT_NEW = """
 INSERT INTO jobs (ats, slug, external_id, title, location, locations_json, url,
                   posted_at, first_seen_at, last_seen_at, content_hash, source,
-                  role_family, is_engineering, is_fde, seniority, classified_by)
+                  role_family, is_engineering, is_fde, seniority, classified_by, region)
 SELECT s.ats, s.slug, s.external_id, s.title, s.location, s.locations_json, s.url,
        s.posted_at, ?, ?, s.content_hash, 'poll',
-       s.role_family, s.is_engineering, s.is_fde, s.seniority, s.classified_by
+       s.role_family, s.is_engineering, s.is_fde, s.seniority, s.classified_by,
+       s.region
 FROM staged_postings s
 WHERE true
 ON CONFLICT (ats, slug, external_id) DO NOTHING
@@ -101,6 +103,7 @@ edit statement seeing the same row a second time.
 REOPEN = """
 UPDATE jobs SET title=s.title, location=s.location, locations_json=s.locations_json,
                 url=s.url, posted_at=s.posted_at, content_hash=s.content_hash,
+                region=s.region,
                 role_family=s.role_family, is_engineering=s.is_engineering,
                 is_fde=s.is_fde, seniority=s.seniority, classified_by=s.classified_by,
                 last_seen_at=?, missing_polls=0, status='open', closed_at=NULL
@@ -137,6 +140,7 @@ WHERE jobs.ats=s.ats AND jobs.slug=s.slug AND jobs.external_id=s.external_id
 EDIT = """
 UPDATE jobs SET title=s.title, location=s.location, locations_json=s.locations_json,
                 url=s.url, posted_at=s.posted_at, content_hash=s.content_hash,
+                region=s.region,
                 role_family=s.role_family, is_engineering=s.is_engineering,
                 is_fde=s.is_fde, seniority=s.seniority, classified_by=s.classified_by,
                 last_seen_at=?, missing_polls=0
@@ -277,6 +281,7 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
                     int(role.is_fde),
                     role.seniority,
                     role.ruleset,
+                    geo.region(p.location),
                 )
             )
     if skipped:
@@ -286,8 +291,8 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             """INSERT INTO staged_postings
                    (ats, slug, external_id, title, location, locations_json, url,
                     posted_at, content_hash, role_family, is_engineering, is_fde,
-                    seniority, classified_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    seniority, classified_by, region)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (ats, slug, external_id) DO NOTHING""",
             rows,
         )

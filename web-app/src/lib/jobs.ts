@@ -30,6 +30,18 @@ function where(f: Filters): { sql: string; args: unknown[] } {
    * name yet, and searching only c.name would silently miss every row the
    * reader can see a value in.
    */
+  /**
+   * A stored column, so this is an index seek rather than a gazetteer run
+   * over every candidate row. Several checked regions are an OR, and none
+   * checked means no constraint -- not zero results.
+   */
+  if (f.regions?.length) {
+    const start = args.length + 1;
+    args.push(...f.regions);
+    const marks = f.regions.map((_, i) => `$${start + i}`).join(", ");
+    parts.push(`j.region IN (${marks})`);
+  }
+
   if (f.company) {
     const like = `%${f.company}%`;
     args.push(like, like);

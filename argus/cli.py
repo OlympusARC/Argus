@@ -27,10 +27,15 @@ def _fmt(n) -> str:
 
 def cmd_init(args) -> int:
     conn = db.init_db()
-    tables = [
-        r["name"]
-        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-    ]
+    """
+    Same trap as the version check: sqlite_master is not a thing on Postgres.
+    """
+    listing = (
+        "SELECT tablename AS name FROM pg_tables WHERE schemaname='public' ORDER BY name"
+        if db.is_postgres()
+        else "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    )
+    tables = [r["name"] for r in conn.execute(listing)]
     print(f"initialized {config.DB_PATH}")
     print("tables:", ", ".join(t for t in tables if not t.startswith("sqlite_")))
     return 0

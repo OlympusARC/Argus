@@ -23,10 +23,19 @@ export default async function Page({
     const v = sp[k];
     return Array.isArray(v) ? v[0] : v;
   };
+  /**
+   * region repeats rather than joining, so a single value arrives as a
+   * string and several as an array. Both have to become a list.
+   */
+  const many = (k: string) => {
+    const v = sp[k];
+    return v === undefined ? [] : Array.isArray(v) ? v : [v];
+  };
 
   const filters: F = {
     q: one("q"),
     company: one("company"),
+    regions: many("region"),
     family: one("family"),
     seniority: one("seniority"),
     ats: one("ats"),

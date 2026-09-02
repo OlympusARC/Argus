@@ -498,3 +498,41 @@ def test_a_date_we_already_have_is_never_overwritten(conn, monkeypatch):
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_700_000_000)]})
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_790_000_000)]})
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_700_000_000
+
+
+def test_region_is_computed_at_ingest(conn, monkeypatch):
+    """geo.region reads a gazetteer in Python, so the alternative to a stored
+    column is fetching every row and deciding in the application. Written on
+    insert, like role_family, for the same reason."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    diff.run_batch(
+        conn,
+        {
+            ("ashby", "acme"): [
+                post("1", location="San Francisco, CA"),
+                post("2", location="Berlin, Germany"),
+                post("3", location="Remote"),
+                post("4", location=None),
+            ]
+        },
+    )
+    got = {
+        r["external_id"]: r["region"]
+        for r in conn.execute("SELECT external_id, region FROM jobs")
+    }
+    assert got == {"1": "us", "2": "europe", "3": "remote", "4": "unknown"}
+
+
+def test_a_posting_that_moves_gets_a_new_region(conn, monkeypatch):
+    """Region rides the edit path rather than being frozen at insert: a
+    posting relisted in another office is genuinely somewhere else."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", location="Austin, TX")]})
+    assert conn.execute("SELECT region FROM jobs").fetchone()["region"] == "us"
+
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", location="Dublin, Ireland")]})
+    assert conn.execute("SELECT region FROM jobs").fetchone()["region"] == "europe"

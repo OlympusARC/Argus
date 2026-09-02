@@ -32,6 +32,23 @@ export const ATSES = [
   "recruitee",
 ] as const;
 
+/**
+ * Regions, as the dashboard offers them. `other` is absent on purpose: the
+ * ingest filter refuses anything positively outside the US and Europe, so
+ * the 187 rows carrying it predate that filter and are not worth a control.
+ *
+ * `unknown` is offered, and matters -- 23,878 postings name a place no
+ * gazetteer here recognises, or name none at all, and most Workday postings
+ * are among them. Hiding them behind no control would quietly remove a
+ * quarter of the corpus from every filtered view.
+ */
+export const REGIONS = [
+  { value: "us", label: "United States" },
+  { value: "europe", label: "Europe" },
+  { value: "remote", label: "Remote" },
+  { value: "unknown", label: "Unspecified" },
+] as const;
+
 export const PAGE_SIZE = 50;
 
 export type Job = {
@@ -52,6 +69,7 @@ export type Job = {
 export type Filters = {
   q?: string;
   company?: string;
+  regions?: string[];
   family?: string;
   seniority?: string;
   ats?: string;

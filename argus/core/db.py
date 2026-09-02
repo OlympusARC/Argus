@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import config
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA = """
 -- Who is hiring, independent of how we currently reach them.
@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     is_fde            INTEGER,
     seniority         TEXT,
     classified_by     TEXT,
+    -- Which of us / europe / remote / unknown / other, from the free-text
+    -- location. Stored for the same reason role_family is: geo.region reads
+    -- a gazetteer in Python, so the alternative to a column is fetching every
+    -- row and deciding in the application.
+    region            TEXT,
     PRIMARY KEY (ats, slug, external_id)
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_board_open  ON jobs(ats, slug, status);
@@ -132,6 +137,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_family ON jobs(role_family, status, first_se
 CREATE INDEX IF NOT EXISTS idx_jobs_eng    ON jobs(is_engineering, status, first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_fde    ON jobs(is_fde, status, first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_stale  ON jobs(classified_by);
+CREATE INDEX IF NOT EXISTS idx_jobs_region ON jobs(region, status, posted_at DESC);
 
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,6 +280,13 @@ MIGRATIONS: dict[int, list[str]] = {
     # Classification columns. Nullable, because rows written before this exist
     # and the sweep fills them in; classified_by NULL simply means never
     # classified, which is the same queue as classified by an older ruleset.
+    # Region, nullable for the same reason the classification columns are:
+    # rows written before it exist, and a backfill fills them in. NULL means
+    # never computed, which is a different thing from 'unknown' -- that is a
+    # decision the gazetteer reached.
+    11: [
+        "ALTER TABLE jobs ADD COLUMN region TEXT",
+    ],
     7: [
         "ALTER TABLE jobs ADD COLUMN role_family TEXT",
         "ALTER TABLE jobs ADD COLUMN is_engineering INTEGER",
@@ -360,13 +373,19 @@ def init_db(path: Path | None = None) -> sqlite3.Connection:
         return connect(path)
 
     conn = connect(path)
-    row = (
-        conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'"
-        ).fetchone()
-        else None
-    )
+    """
+    Ask for the row and accept that it may not be there, rather than asking
+    the catalogue first. sqlite_master does not exist on Postgres, so the
+    guard raised there before it could read a version -- which meant `argus
+    init` failed against Postgres and no migration had ever run on it.
+
+    A missing table and a missing row mean the same thing to this function,
+    so one except covers both and neither needs a dialect.
+    """
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    except Exception:
+        row = None
     current = int(row["value"]) if row else 0
     """
     Migrations run FIRST. SCHEMA indexes the columns they add, so creating

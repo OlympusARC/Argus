@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RegionFilter } from "@/components/region-filter";
 import { ATSES, FAMILIES, SENIORITIES } from "@/lib/taxonomy";
 
 const ANY = "__any";
@@ -64,7 +65,9 @@ export function Filters({ total }: { total: number }) {
     return () => clearTimeout(id);
   }, [q, co, params, push]);
 
-  const active = ["family", "seniority", "ats", "q", "company"].filter((k) => params.get(k));
+  const active = ["family", "seniority", "ats", "q", "company", "region"].filter((k) =>
+    params.get(k),
+  );
 
   return (
     <div className="flex flex-col gap-3">
@@ -87,6 +90,8 @@ export function Filters({ total }: { total: number }) {
           options={FAMILIES}
           onChange={(v) => set("family", v)}
         />
+        <RegionFilter />
+
         <Picker
           label="Level"
           value={params.get("seniority")}
