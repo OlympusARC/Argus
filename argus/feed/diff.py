@@ -110,6 +110,30 @@ WHERE jobs.ats=s.ats AND jobs.slug=s.slug AND jobs.external_id=s.external_id
 RETURNING jobs.ats, jobs.slug, jobs.external_id, jobs.title, jobs.url, jobs.location
 """
 
+"""
+Fill in a posted date we did not have, without calling it an edit.
+
+posted_at is not in _HASHED, deliberately -- it must not make a posting look
+edited. But that also means a row cannot acquire one later through the edit
+path, because gaining a date does not change the hash, so the posting is
+merely touched and the column stays null forever.
+
+That is not hypothetical: the Workday adapter learned to read "Posted 5 Days
+Ago" after 54,843 of its postings were already stored, and without this they
+would have stayed dateless until each one closed and returned.
+
+Only ever fills a null. It never overwrites a date the board previously gave
+us, so a source that starts reporting something different cannot rewrite
+history, and it emits nothing -- no event, no edit, no digest line.
+"""
+BACKFILL_POSTED = """
+UPDATE jobs SET posted_at = s.posted_at
+FROM staged_postings s
+WHERE jobs.ats=s.ats AND jobs.slug=s.slug AND jobs.external_id=s.external_id
+  AND jobs.posted_at IS NULL
+  AND s.posted_at IS NOT NULL
+"""
+
 EDIT = """
 UPDATE jobs SET title=s.title, location=s.location, locations_json=s.locations_json,
                 url=s.url, posted_at=s.posted_at, content_hash=s.content_hash,
@@ -318,6 +342,11 @@ def run_batch(conn, fetched: dict[Key, list[Posting]]) -> dict[Key, dict]:
             if key in result:
                 result[key][kind].append(row)
     conn.execute(TOUCH, (ts,))
+    """
+    After the three that report, because this one reports nothing: a row that
+    gains a date it never had is not news to anybody.
+    """
+    conn.execute(BACKFILL_POSTED)
 
     grace = config.CLOSE_GRACE_POLLS
     for row in _rows(conn.execute(MISSING, (grace, grace, ts))):

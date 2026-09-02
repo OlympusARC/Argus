@@ -466,3 +466,35 @@ def test_thirty_plus_days_is_not_a_date():
     assert posted_from_relative("Posted 30+ Days Ago", 1_788_400_000) is None
     assert posted_from_relative(None) is None
     assert posted_from_relative("nonsense") is None
+
+
+def test_a_missing_posted_date_is_filled_in_later(conn, monkeypatch):
+    """posted_at is not in _HASHED so it cannot make a posting look edited --
+    which also means a row cannot gain one through the edit path, because
+    gaining a date does not change the hash. The Workday adapter learned to
+    read relative dates after 54,843 of its postings were already stored."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
+    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] is None
+
+    """
+    Same posting, same hash -- only the date is new. It is touched, not
+    edited, so nothing but the column moves.
+    """
+    changed = diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_790_000_000)]})
+    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_790_000_000
+    assert changed[("ashby", "acme")]["edited"] == [], "a filled-in date is not an edit"
+    assert changed[("ashby", "acme")]["new"] == []
+
+
+def test_a_date_we_already_have_is_never_overwritten(conn, monkeypatch):
+    """Only nulls are filled. A source that starts reporting something
+    different must not be able to rewrite history."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_700_000_000)]})
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_790_000_000)]})
+    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_700_000_000
