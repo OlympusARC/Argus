@@ -11,7 +11,8 @@ export function Pager({ page, hasMore }: { page: number; hasMore: boolean }) {
 
   const go = (n: number) => {
     const next = new URLSearchParams(params.toString());
-    n <= 1 ? next.delete("page") : next.set("page", String(n));
+    if (n <= 1) next.delete("page");
+    else next.set("page", String(n));
     router.push(`/?${next.toString()}`, { scroll: false });
   };
 

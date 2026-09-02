@@ -23,7 +23,6 @@ function where(f: Filters): { sql: string; args: unknown[] } {
   if (f.seniority) add("j.seniority = ?", f.seniority);
   if (f.ats) add("j.ats = ?", f.ats);
   if (f.q) add("j.title ILIKE ?", `%${f.q}%`);
-  if (f.location) add("j.location ILIKE ?", `%${f.location}%`);
 
   return { sql: parts.join(" AND "), args };
 }
@@ -37,7 +36,7 @@ function where(f: Filters): { sql: string; args: unknown[] } {
  * exactly when the number stops being obvious.
  */
 export async function countJobs(f: Filters): Promise<number | null> {
-  const hasFilter = Boolean(f.family || f.seniority || f.ats || f.q || f.location);
+  const hasFilter = Boolean(f.family || f.seniority || f.ats || f.q);
   if (!hasFilter) return null;
   const { sql, args } = where(f);
   const [row] = await query<{ n: string }>(
@@ -58,7 +57,7 @@ export async function listJobs(f: Filters): Promise<{ jobs: Job[]; hasMore: bool
    */
   const rows = await query<Job>(
     `SELECT j.ats, j.slug, j.external_id, j.title, j.url, j.location,
-            j.role_family, j.seniority, j.is_fde, j.first_seen_at,
+            j.role_family, j.seniority, j.is_fde, j.posted_at, j.first_seen_at,
             c.name AS company
        FROM jobs j
        LEFT JOIN boards b ON b.ats = j.ats AND b.slug = j.slug

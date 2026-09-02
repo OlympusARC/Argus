@@ -44,6 +44,7 @@ export type Job = {
   role_family: string | null;
   seniority: string | null;
   is_fde: boolean | null;
+  posted_at: number | null;
   first_seen_at: number | null;
   company: string | null;
 };
@@ -53,6 +54,5 @@ export type Filters = {
   family?: string;
   seniority?: string;
   ats?: string;
-  location?: string;
   page?: number;
 };

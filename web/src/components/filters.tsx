@@ -30,7 +30,6 @@ export function Filters({ total, filtered }: { total: number; filtered: boolean 
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [q, setQ] = useState(params.get("q") ?? "");
-  const [loc, setLoc] = useState(params.get("location") ?? "");
 
   const push = useCallback(
     (next: URLSearchParams) => {
@@ -53,16 +52,16 @@ export function Filters({ total, filtered }: { total: number; filtered: boolean 
    */
   useEffect(() => {
     const id = setTimeout(() => {
-      if ((params.get("q") ?? "") === q && (params.get("location") ?? "") === loc) return;
+      if ((params.get("q") ?? "") === q) return;
       const next = new URLSearchParams(params.toString());
-      q ? next.set("q", q) : next.delete("q");
-      loc ? next.set("location", loc) : next.delete("location");
+      if (q) next.set("q", q);
+      else next.delete("q");
       push(next);
     }, 350);
     return () => clearTimeout(id);
-  }, [q, loc, params, push]);
+  }, [q, params, push]);
 
-  const active = ["family", "seniority", "ats", "q", "location"].filter((k) => params.get(k));
+  const active = ["family", "seniority", "ats", "q"].filter((k) => params.get(k));
 
   return (
     <div className="flex flex-col gap-3">
@@ -71,17 +70,10 @@ export function Filters({ total, filtered }: { total: number; filtered: boolean 
           placeholder="Search titles…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="h-9 w-full sm:w-64"
+          className="h-9 w-full sm:w-72"
         />
-        <Input
-          placeholder="Location…"
-          value={loc}
-          onChange={(e) => setLoc(e.target.value)}
-          className="h-9 w-full sm:w-44"
-        />
-
         <Picker
-          label="Family"
+          label="Type"
           value={params.get("family")}
           options={FAMILIES}
           onChange={(v) => set("family", v)}
