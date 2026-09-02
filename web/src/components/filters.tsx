@@ -30,6 +30,7 @@ export function Filters({ total }: { total: number }) {
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [q, setQ] = useState(params.get("q") ?? "");
+  const [co, setCo] = useState(params.get("company") ?? "");
 
   const push = useCallback(
     (next: URLSearchParams) => {
@@ -52,25 +53,33 @@ export function Filters({ total }: { total: number }) {
    */
   useEffect(() => {
     const id = setTimeout(() => {
-      if ((params.get("q") ?? "") === q) return;
+      if ((params.get("q") ?? "") === q && (params.get("company") ?? "") === co) return;
       const next = new URLSearchParams(params.toString());
       if (q) next.set("q", q);
       else next.delete("q");
+      if (co) next.set("company", co);
+      else next.delete("company");
       push(next);
     }, 350);
     return () => clearTimeout(id);
-  }, [q, params, push]);
+  }, [q, co, params, push]);
 
-  const active = ["family", "seniority", "ats", "q"].filter((k) => params.get(k));
+  const active = ["family", "seniority", "ats", "q", "company"].filter((k) => params.get(k));
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <Input
-          placeholder="Search titles…"
+          placeholder="Search roles…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          className="h-9 w-full sm:w-72"
+          className="h-9 w-full sm:w-64"
+        />
+        <Input
+          placeholder="Search companies…"
+          value={co}
+          onChange={(e) => setCo(e.target.value)}
+          className="h-9 w-full sm:w-56"
         />
         <Picker
           label="Type"
@@ -96,7 +105,11 @@ export function Filters({ total }: { total: number }) {
             variant="ghost"
             size="sm"
             className="h-9 text-muted-foreground"
-            onClick={() => push(new URLSearchParams())}
+            onClick={() => {
+              setQ("");
+              setCo("");
+              push(new URLSearchParams());
+            }}
           >
             <X className="size-3.5" />
             Clear

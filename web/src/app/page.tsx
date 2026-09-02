@@ -26,6 +26,7 @@ export default async function Page({
 
   const filters: F = {
     q: one("q"),
+    company: one("company"),
     family: one("family"),
     seniority: one("seniority"),
     ats: one("ats"),

@@ -24,6 +24,18 @@ function where(f: Filters): { sql: string; args: unknown[] } {
   if (f.ats) add("j.ats = ?", f.ats);
   if (f.q) add("j.title ILIKE ?", `%${f.q}%`);
 
+  /**
+   * Company matches the name or the board slug, because the table shows the
+   * slug whenever the name is unknown -- 6,382 companies have no resolved
+   * name yet, and searching only c.name would silently miss every row the
+   * reader can see a value in.
+   */
+  if (f.company) {
+    const like = `%${f.company}%`;
+    args.push(like, like);
+    parts.push(`(c.name ILIKE $${args.length - 1} OR j.slug ILIKE $${args.length})`);
+  }
+
   return { sql: parts.join(" AND "), args };
 }
 
@@ -37,8 +49,18 @@ function where(f: Filters): { sql: string; args: unknown[] } {
  */
 export async function countJobs(f: Filters): Promise<number> {
   const { sql, args } = where(f);
+  /**
+   * The same joins as the listing, because the company filter and the
+   * company sort both reach through them. Counting from jobs alone was fine
+   * while every filter was a column on jobs; it would now be a missing-column
+   * error the moment someone searched a company.
+   */
   const [row] = await query<{ n: string }>(
-    `SELECT COUNT(*) n FROM jobs j WHERE ${sql}`,
+    `SELECT COUNT(*) n
+       FROM jobs j
+       LEFT JOIN boards b ON b.ats = j.ats AND b.slug = j.slug
+       LEFT JOIN companies c ON c.id = b.company_id
+      WHERE ${sql}`,
     args,
   );
   return Number(row.n);

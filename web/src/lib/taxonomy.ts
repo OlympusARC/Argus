@@ -51,6 +51,7 @@ export type Job = {
 
 export type Filters = {
   q?: string;
+  company?: string;
   family?: string;
   seniority?: string;
   ats?: string;
