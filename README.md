@@ -195,8 +195,9 @@ building anything.
 
 | variable | for |
 |---|---|
-| `SUPABASE_DB_PASSWORD` | Postgres. Absent, everything falls back to local SQLite |
-| `SUPABASE_REF`, `SUPABASE_REGION` | compose the connection string; not secret |
+| `SUPABASE_DB_PASSWORD` | Postgres, with the ref below. Either absent, everything falls back to local SQLite |
+| `SUPABASE_REF` | which project. Not committed -- see below |
+| `SUPABASE_REGION` | defaults to `us-west-2` |
 | `ARGUS_DISCORD_WEBHOOK` | the hourly digest. Absent, `notify` prints and exits 0 |
 | `ARGUS_STORE_FAMILIES` | which role families are stored at all (see below) |
 | `GROQ_API_KEY` / `NVIDIA_API_KEY` / `GEMINI_API_KEY` | the agents. Absent, they skip |
@@ -205,6 +206,14 @@ building anything.
 Every one is optional. A fresh clone with no configuration at all runs against
 SQLite, skips the sources and agents that need credentials, and says which ones
 it skipped.
+
+`SUPABASE_REF` carries no default, which is deliberate and the odd one out --
+the region defaults happily enough. The ref is not a secret; it is a username,
+and the password is what guards the database. But it names one specific host on
+a port open to the internet, a Supabase project ref cannot be rotated the way a
+password can, and nothing here is a browser client that would publish it anyway.
+A public repository is public forever, so there is nothing to buy by committing
+it. Set it as a repository *variable* and the password as a *secret*.
 
 ### What gets stored
 

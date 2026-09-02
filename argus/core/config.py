@@ -17,9 +17,30 @@ poll. The API wants the transaction pooler (6543), where connections are
 short and numerous.
 """
 DATABASE_URL = os.getenv("ARGUS_DATABASE_URL") or os.getenv("DATABASE_URL")
+
+"""
+`or` rather than a getenv default, because the two disagree on the empty
+string. A GitHub Actions step written as
+
+    SUPABASE_REF: ${{ vars.SUPABASE_REF }}
+
+sets the variable to "" when the repository has no such variable -- it does
+not leave it unset -- and os.getenv returns "" for a key that is present and
+empty, never the default. The composed host becomes aws-0-.pooler.supabase.com
+and the connection fails somewhere far from here.
+"""
 SUPABASE_REF = os.getenv("SUPABASE_REF") or None
-SUPABASE_REGION = os.getenv("SUPABASE_REGION", "us-west-2")
-SUPABASE_DB_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD")
+SUPABASE_REGION = os.getenv("SUPABASE_REGION") or "us-west-2"
+SUPABASE_DB_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD") or None
+
+"""
+The ref carries no committed default, unlike the region. It is not a secret
+-- it is a username, and the password is what guards the database -- but it
+names a specific host on a port open to the internet, and a Supabase project
+ref cannot be rotated the way a password can. A repository is public forever
+and this project has no browser client that would publish the ref anyway, so
+there is nothing to buy by committing it.
+"""
 
 
 def database_url(pooled: bool = False) -> str | None:
