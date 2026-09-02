@@ -12,13 +12,40 @@ means of doing it.
               daily                 daily                 hourly
   sources ──▶ companies ──▶ resolve careers ──▶ boards ──▶ poll ──▶ jobs ──▶ events
               domain          careers_url       ats+slug         ats+slug+external_id
-                  ▲                                  │
-                  └──────── a board that names its employer ──────┘
+                  ▲                                  │                    │
+                  └──── a board that names its employer ────┘             ▼
+                                                                       digest
 ```
 
 Nothing writes upward. Discovery fills companies and boards; only the reconciler
 writes postings. That is what lets a noisy discovery source be harmless, and an
 ATS be added without re-running discovery.
+
+## Two lanes
+
+The pipeline splits in two, and the split is the most important thing about it.
+
+**Lane A is the feed.** Hourly, fixed, deliberately dumb: poll every due board,
+diff it against what we stored, emit events, post a digest. It must produce job
+alerts even if everything else is broken.
+
+**Lane B is the brain.** Daily, budgeted, and it *decides*. Rather than "run
+discover at 03:00 no matter what", it reads the measured state of the system and
+picks the most valuable work available — validate a backlog, investigate a source
+that stopped yielding, sweep a stale ruleset, or go looking for new sources.
+
+```
+cron ─┬─ hourly ──▶  LANE A   poll ──▶ notify              (no LangGraph, no LLM)
+      │
+      └─ daily ───▶  LANE B   measure ──▶ policy ──▶ act ──▶ record ──▶ ↺
+                                              │
+                                   discover · resolve · validate · classify
+                                   heal · prospect          (LLM, gated)
+```
+
+Lane A is not a node in Lane B's graph, and a test fails if the feed ever imports
+the LLM layer or the graph framework. A stuck brain, an exhausted quota or a
+LangGraph bug can therefore never delay a job posting.
 
 ## Why discovery is hard
 
@@ -49,17 +76,34 @@ it belongs to that company: it carries a board we already tied to them, or a slu
 matching their name. Without that check a company called Alan happily adopts some
 unrelated `alan.com` as its careers page.
 
+## Agents propose; code disposes
+
+Lane B can use a model for the parts that are genuinely open-ended — finding new
+sources, diagnosing a broken one, improving the classification rules. None of
+them can write anything.
+
+An agent's output is a row in `proposals`. A deterministic **gate** then measures
+the claim rather than judging the reasoning: a prospector says a page lists job
+boards, so the gate fetches it, extracts with the pipeline's own router, and
+counts how many are new to the registry. Twenty-five or more applies itself, one
+to twenty-four waits for a human, zero is a rejection with the evidence attached.
+
+Two prohibitions are structural rather than procedural. A `diagnosis` has no gate,
+so there is no way to say yes to it, and no applier, so it cannot be enacted at
+all. Nothing touching the reconcile path has either — and a test asserts their
+continued absence, which is a check nobody can invert.
+
 ## Quick start
 
 ```bash
-make install                            # venv + editable install
-./.venv/bin/argus init                  # create the database
-./.venv/bin/argus sources               # which sources are ready
-./.venv/bin/argus discover              # fill companies and boards
-./.venv/bin/argus companies --resolve   # find their careers pages
-./.venv/bin/argus validate              # probe boards, settle status
-./.venv/bin/argus poll                  # reconcile, emit job events
-./.venv/bin/argus stats                 # what we have
+make install                    # venv + editable install
+argus init                      # create the database
+argus sources                   # which discovery sources are ready
+argus discover                  # fill companies and boards
+argus companies --resolve       # find their careers pages
+argus validate                  # probe boards, settle status
+argus poll                      # reconcile, emit job events
+argus stats                     # what we have
 ```
 
 `companies --resolve` is the slow one: it fetches up to three candidate domains
@@ -67,20 +111,53 @@ per company and most of them miss. It is capped per run and scheduled daily
 rather than swept, so the corpus fills in steadily instead of hammering thousands
 of unrelated domains at once.
 
+## Commands
+
+| | |
+|---|---|
+| `init` | create or migrate the database |
+| `discover` | sweep every ready source for boards and companies |
+| `validate` | probe unvalidated boards, settle active or dead |
+| `companies` | the registry; `--resolve` attaches careers pages |
+| `careers` | find or re-check a company's careers page |
+| `poll` | reconcile due boards and emit job events |
+| `classify` | apply the current ruleset to postings that predate it |
+| `notify` | post the hourly digest of new engineering roles |
+| `events` | recent new / edited / closed job events |
+| `stats` | registry and feed summary |
+| `health` | per-source yield, and which sources have collapsed |
+| `orchestrate` | decide and run the most valuable work within a budget |
+| `proposals` | what the agents suggested, and what the gates decided |
+| `llm` | which model providers are configured |
+| `mine` | mine ruleset patterns from the unplaced title tail |
+| `prospect` | propose new discovery sources, measured by what they yield |
+| `heal` | diagnose a source whose yield collapsed |
+
+Two are worth knowing before you run them. `argus orchestrate --dry-run` prints
+the state, every policy rule and what it would start with, without doing any of
+it. `argus notify --dry-run` renders the digest that would be posted and moves
+nothing.
+
 ## Layout
 
 ```
 argus/
-  cli.py           command line surface
+  cli.py           command line surface, deliberately thin
   core/            settings, storage, HTTP, data shapes, URL routing, name norms
   adapters/        one per ATS -- fetch a board, return Postings
   discovery/       one per source -- yield BoardRefs and CompanyRefs, nothing else
   registry/        who exists (companies), which boards are real, careers pages
-  feed/            postings and the events emitted as they change
+  classify/        the role ruleset: engineering, fde, ai, data, security, ...
+  feed/            postings, the set-diff that writes them, and the digest
+  obs/             what each source actually produced, run over run
+  orchestrator/    measure, policy, nodes, graph -- Lane B's loop
+  proposals/       where an agent's output lands, and the gates that judge it
+  llm/             the provider chain; structured output or nothing
+  agents/          classifier, prospector, healer -- all advisory
 api/               FastAPI read surface
-supabase/          SQL migrations, applied on merge to main
+supabase/          SQL migrations for Postgres
+scripts/           backfill: restore a corpus into Postgres
 seeds/             hand-written slug lists (source, tracked)
-docs/              architecture and the GitHub job-repo survey
 tests/
 ```
 
@@ -88,22 +165,58 @@ The dependency direction is one-way: `core` knows nothing about the layers above
 it, `discovery` only ever writes to `registry`, and only the reconciler writes to
 `feed`.
 
-## Operations
+## Running it
 
-Scheduling is GitHub Actions, not an in-process scheduler — schedules live in
-version-controlled YAML, each run is isolated, and failures are visible without
-building anything. The pipeline's only runtime dependency is `requests`.
+The pipeline's only runtime dependency is `requests`. Everything else is an
+optional extra, so a runner that only polls installs neither the API nor the
+graph framework:
+
+```bash
+pip install -e '.[postgres]'                 # the pipeline
+pip install -e '.[postgres,orchestrator]'    # + Lane B
+pip install -e '.[dev]'                      # + tests and lint
+```
+
+Scheduling is GitHub Actions rather than an in-process scheduler — schedules live
+in version-controlled YAML, each run is isolated, and failures are visible without
+building anything.
 
 | workflow | cadence | does |
 |---|---|---|
+| `poll.yml` | hourly | `poll`, `classify`, then `notify` |
 | `discover.yml` | daily | `discover`, then `companies --resolve` |
-| `poll.yml` | hourly | `poll` across every due board |
+| `orchestrate.yml` | daily | Lane B, within a 45-minute budget |
+
+> **The workflows are not committed yet.** They are held back deliberately until
+> the pipeline has been exercised by hand against a fresh database. Nothing in
+> this repo runs on a schedule until they land.
+
+### Configuration
+
+| variable | for |
+|---|---|
+| `SUPABASE_DB_PASSWORD` | Postgres. Absent, everything falls back to local SQLite |
+| `SUPABASE_REF`, `SUPABASE_REGION` | compose the connection string; not secret |
+| `ARGUS_DISCORD_WEBHOOK` | the hourly digest. Absent, `notify` prints and exits 0 |
+| `GROQ_API_KEY` / `NVIDIA_API_KEY` / `GEMINI_API_KEY` | the agents. Absent, they skip |
+| `GITHUB_TOKEN`, `BRAVE_API_KEY`, `ARGUS_SEC_CONTACT` | individual discovery sources |
+
+Every one is optional. A fresh clone with no configuration at all runs against
+SQLite, skips the sources and agents that need credentials, and says which ones
+it skipped.
+
+Migrations in `supabase/migrations/` are **not** applied automatically by any
+workflow. Apply them with `make db-push` (which runs `supabase db push`) against
+the linked project.
 
 ## Notes that are easy to get wrong
 
 - **ATS slugs are case-insensitive.** `ramp`, `Ramp` and `RAMP` are one board.
   Slugs are lowercased on parse; skipping this creates duplicate rows that poll
   the same board.
+- **A file is never a company.** Every ATS serves `robots.txt` and `sitemap.xml`
+  off the same path shape a board occupies. In one crawl, 62 of 62 Lever records
+  were `robots.txt` — and all 62 parsed cleanly as a board named `robots.txt`.
 - **HN escapes URLs as HTML entities** (`&#x2F;` for `/`), which silently defeats
   any URL regex. `urls.extract_all` unescapes first — pinned by a test.
 - **`content_hash` excludes server timestamps.** Greenhouse bumps `updated_at` on
@@ -118,12 +231,16 @@ building anything. The pipeline's only runtime dependency is `requests`.
   `visly.app/careers` returns Figma's Greenhouse board, so any source probing an
   arbitrary domain must check the domain looks like the board it found before
   attributing it.
-
-## Documentation
-
-- [docs/architecture.md](docs/architecture.md) — tables, sources, deployment, open work
-- [docs/architecture.excalidraw](docs/architecture.excalidraw) — the whole system on one
-  canvas. Drag it onto [excalidraw.com](https://excalidraw.com), or regenerate it with
-  `python scripts/make_diagram.py > docs/architecture.excalidraw`
-- [docs/github-job-repos.md](docs/github-job-repos.md) — the survey of 958 job-list
-  repos, what each is worth, and the families that look valuable but are not
+- **A batch is bounded by postings, not by boards.** Workday averages 183 open
+  postings per board against Ashby's 17, and one board holds 20,598 — so a
+  hundred busy boards stages 181,401 rows and the edit statement runs past
+  Postgres's statement timeout.
+- **A trailing `\b` cannot match a suffix.** `quantitative research` silently
+  missed every *Researcher* in the corpus. The same shape hid *Vulnerability
+  Researcher* and *Solutions Architecture*.
+- **Substring matching on job titles is a trap.** `%llm%` matches *Fulfillment
+  Associate* and *Licensed Master Social Worker*. Every pattern uses word
+  boundaries for that reason.
+- **A silent zero is almost never the world being empty.** A source that returns
+  nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
+  one host of ten for months while every run looked entirely normal.
