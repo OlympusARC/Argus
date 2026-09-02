@@ -44,7 +44,7 @@ def fake_provider(monkeypatch, replies):
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     seq = list(replies)
 
-    def fake_post(p, messages, schema, max_tokens):
+    def fake_post(p, messages, schema, max_tokens, effort=None):
         llm._calls[0] += 1
         return seq.pop(0) if seq else None
 
@@ -89,7 +89,7 @@ def test_a_malformed_reply_is_retried_once_then_dropped(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "k")
     calls = []
 
-    def always_bad(p, messages, schema, max_tokens):
+    def always_bad(p, messages, schema, max_tokens, effort=None):
         calls.append(1)
         llm._calls[0] += 1
         return None
@@ -104,7 +104,7 @@ def test_failover_moves_to_the_next_provider(monkeypatch):
     monkeypatch.setenv("NVIDIA_API_KEY", "k")
     seen = []
 
-    def flaky(p, messages, schema, max_tokens):
+    def flaky(p, messages, schema, max_tokens, effort=None):
         seen.append(p.name)
         if p.name == "groq":
             raise ConnectionError("groq down")
@@ -275,3 +275,105 @@ def test_the_probe_is_deterministic_and_needs_no_model(conn):
     out = healer.probe("commoncrawl")
     assert out["buildable"] and "hosts" in out
     assert len(out["hosts"]) >= 10, "the real host list, post-fix"
+
+
+"""
+The token budget. Found live: the classifier asked for a flat max_tokens=8192
+and Groq's free tier allows 8,000 tokens per minute, so every batch was
+rejected with a 413 and then silently skipped. The agent reported an empty
+tail rather than a broken provider.
+"""
+
+
+def test_a_request_is_costed_including_the_tokens_it_reserves():
+    """max_tokens is charged as requested, not as used. Costing only the
+    prompt is what made an over-generous ask look free."""
+    msgs = [{"role": "user", "content": "x" * 400}]
+    assert llm.request_cost(msgs, 0) == pytest.approx(101, abs=2)
+    assert llm.request_cost(msgs, 8192) > 8192
+
+
+def test_a_provider_that_cannot_serve_the_request_is_skipped_not_tried():
+    """Trying anyway costs a call to learn what arithmetic already knew, and
+    on a per-minute budget the failed call is charged too."""
+    small = llm.Provider("tiny", "https://example.invalid/v1", "PATH", "m", tpm=1_000)
+    out = llm.complete(
+        [{"role": "user", "content": "hello"}],
+        schema={"type": "object", "properties": {}, "additionalProperties": False},
+        max_tokens=8192,
+        providers=[small],
+    )
+    assert out is None
+    assert any("tpm limit" in s for s in llm.last_skips())
+
+
+def test_an_unknown_tpm_does_not_block_a_provider():
+    """tpm=0 means unmeasured, not zero. Treating it as a limit would disable
+    every provider whose ceiling we have not looked up."""
+    p = llm.Provider("unknown", "https://example.invalid/v1", "PATH", "m")
+    assert p.tpm == 0
+    llm.complete(
+        [{"role": "user", "content": "hello"}],
+        schema={"type": "object", "properties": {}, "additionalProperties": False},
+        max_tokens=8192,
+        providers=[p],
+    )
+    assert not any("tpm limit" in s for s in llm.last_skips()), "attempted, not skipped"
+
+
+def test_the_reply_budget_scales_with_the_batch():
+    """Each label echoes its title back, so a batch of long titles needs a
+    bigger answer than a batch of short ones."""
+    short = classifier.reply_tokens(["QA"] * 50)
+    long = classifier.reply_tokens(
+        ["Senior Staff Software Engineer, Platform Infrastructure"] * 50
+    )
+    assert short < long
+    assert long < 8_000, "a full batch must fit the smallest free per-minute budget"
+
+
+def test_a_skipped_batch_is_reported_rather_than_dropped(monkeypatch):
+    """The bug this block exists for: label() returned [] and the caller read
+    it as an empty tail."""
+    monkeypatch.setattr(llm, "available", lambda: [])
+    labels, failures = classifier.label(["Software Engineer"] * 120)
+    assert labels == []
+    assert len(failures) == 3, "one per batch, not one for the run"
+
+
+def test_reasoning_effort_is_sent_only_where_it_is_understood(monkeypatch):
+    """gpt-oss bills its thinking as completion tokens -- 142 a row at the
+    default effort against 18 at "low", which decides whether a batch fits an
+    8,000 TPM budget. But a provider that does not know the field rejects the
+    whole request, so it must not be sent blindly."""
+    seen = {}
+
+    def capture(p, messages, schema, max_tokens, effort=None):
+        seen[p.name] = effort
+        return {"ok": True}
+
+    monkeypatch.setattr(llm, "_post", capture)
+    thinker = llm.Provider("thinks", "https://x.invalid/v1", "K", "m", reasoning=True)
+    plain = llm.Provider("plain", "https://x.invalid/v1", "K", "m")
+
+    llm.complete(
+        [{"role": "user", "content": "x"}], schema={}, providers=[thinker], effort="low"
+    )
+    llm.complete([{"role": "user", "content": "x"}], schema={}, providers=[plain], effort="low")
+    assert seen == {"thinks": "low", "plain": "low"}, "_post decides, not complete"
+
+
+def test_the_classifier_asks_for_the_cheap_reasoning_mode(monkeypatch):
+    """The setting that made a 43-minute job an 8-minute one."""
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    seen = []
+
+    def capture(p, messages, schema, max_tokens, effort=None):
+        seen.append((effort, max_tokens))
+        llm._calls[0] += 1
+        return {"labels": []}
+
+    monkeypatch.setattr(llm, "_post", capture)
+    classifier.label(["Software Engineer"] * 10)
+    assert seen and seen[0][0] == "low"
+    assert seen[0][1] < 8_000, "and the ask must fit the per-minute ceiling"

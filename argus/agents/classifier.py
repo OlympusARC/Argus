@@ -23,9 +23,13 @@ import random
 from .. import llm
 
 """
-Titles per request. Sized so a batch stays well inside a small model's
-context while keeping the request count low: the whole sample is ~40 calls,
-which fits any free tier's daily allowance several times over.
+Titles per request. Bigger batches are cheaper, not dearer: the system prompt
+is resent with every call, so halving the batch doubles how many times it is
+paid for. Fifty amortises it well while keeping one request comfortably
+inside the smallest free per-minute token budget we know of.
+
+The daily request allowance is not what constrains this. Tokens per minute
+is -- see Provider.tpm.
 """
 BATCH = 50
 
@@ -134,9 +138,33 @@ def tail_titles(conn, limit: int = 2000, seed: int = 0) -> list[str]:
     return titles[:limit]
 
 
-def label(titles: list[str], *, max_calls: int | None = None) -> list[dict]:
-    """Label a sample in batches. Missing batches are skipped, not faked."""
+def reply_tokens(chunk: list[str]) -> int:
+    """How large a reply this chunk needs, with room to spare.
+
+    Every label echoes its title back, so the answer is roughly the input
+    plus a fixed cost per row for the family, the flag and the JSON around
+    them. Half again on top absorbs a batch of unusually long titles.
+
+    Asking for a flat 8,192 instead cost nothing on a per-request cap and
+    everything on a per-minute one: providers reserve max_tokens up front, so
+    the ask alone exceeded Groq's 8,000 TPM and every batch was rejected --
+    then silently skipped, which read as an empty tail rather than a broken
+    agent.
+    """
+    echoed = llm.estimate_tokens("\n".join(chunk))
+    per_row = len(chunk) * 20
+    return int((echoed + per_row) * 1.5) + 128
+
+
+def label(titles: list[str], *, max_calls: int | None = None) -> tuple[list[dict], list[str]]:
+    """Label a sample in batches. Returns the labels and what went wrong.
+
+    A skipped batch used to vanish. Returning the reasons alongside the
+    labels means a run that labelled 400 of 2,000 titles says so, instead of
+    reporting 400 as though that were the whole tail.
+    """
     out: list[dict] = []
+    failures: list[str] = []
     for i in range(0, len(titles), BATCH):
         chunk = titles[i : i + BATCH]
         got = llm.complete(
@@ -145,13 +173,15 @@ def label(titles: list[str], *, max_calls: int | None = None) -> list[dict]:
                 {"role": "user", "content": "\n".join(chunk)},
             ],
             schema=LABEL_SCHEMA,
-            max_tokens=8192,
+            max_tokens=reply_tokens(chunk),
             max_calls=max_calls,
+            effort="low",
         )
         if got is None:
+            failures.extend(llm.last_skips() or [f"batch {i // BATCH}: no provider answered"])
             continue
         out.extend(got.get("labels", []))
-    return out
+    return out, failures
 
 
 def mine(labelled: list[dict], *, max_calls: int | None = None) -> list[dict]:
@@ -208,9 +238,10 @@ def run(conn, *, sample: int = 2000, max_calls: int = 80, seed: int = 0) -> dict
     if not titles:
         return {"skipped": "no unplaced titles", "filed": 0}
 
-    labelled = label(titles, max_calls=max_calls)
+    labelled, failures = label(titles, max_calls=max_calls)
     if not labelled:
-        return {"skipped": "no provider answered", "filed": 0, "sampled": len(titles)}
+        why = failures[0] if failures else "no provider answered"
+        return {"skipped": why, "filed": 0, "sampled": len(titles)}
 
     patterns = mine(labelled, max_calls=max_calls)
     filed = []
@@ -245,4 +276,5 @@ def run(conn, *, sample: int = 2000, max_calls: int = 80, seed: int = 0) -> dict
         "proposal_ids": filed,
         "llm_calls": llm.calls_made(),
         "non_software_engineering": non_software_eng,
+        "failures": failures,
     }

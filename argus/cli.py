@@ -206,6 +206,11 @@ def cmd_mine(args) -> int:
         f"mined {res['patterns']} patterns in {time.time() - t0:.0f}s "
         f"({res['llm_calls']} llm calls)"
     )
+    if res.get("failures"):
+        want = -(-res["sampled"] // classifier.BATCH)
+        print(f"  {len(res['failures'])} of {want} batches did not answer:")
+        for why in dict.fromkeys(res["failures"]):
+            print(f"    {why}")
     print(f"  filed {res['filed']} proposals: {res['proposal_ids']}")
     print(
         f"  of the labelled sample, {res['non_software_engineering']:,} were "

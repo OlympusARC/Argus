@@ -276,3 +276,11 @@ the linked project.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.
+- **The free-tier limit that binds is tokens per minute, not requests per day.**
+  Groq advertises 1,000 RPD and enforces 8,000 TPM, and `max_tokens` is charged
+  as *requested* rather than as used — so a batch asking for 8,192 was refused
+  outright while 997 of the day's requests remained.
+- **A reasoning model bills its thinking as completion tokens.** Labelling fifty
+  job titles cost 142 tokens a row at gpt-oss's default effort and 18 at
+  `reasoning_effort: "low"`. Same answers, same model: an eight-minute job
+  instead of a forty-three-minute one.
