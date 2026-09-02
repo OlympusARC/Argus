@@ -1,0 +1,6 @@
+# Vercel installs this for the API function. The pipeline itself needs only
+# requests and runs on GitHub Actions, not here.
+fastapi>=0.115
+psycopg[binary]>=3.2
+requests>=2.32
+.
