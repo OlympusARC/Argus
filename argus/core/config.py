@@ -99,6 +99,19 @@ re-labelled rather than re-fetched.
 STORE_ONLY_TECHNICAL = os.getenv("ARGUS_STORE_ONLY_TECHNICAL", "1") not in ("0", "false", "")
 
 """
+Which role families are worth keeping. Named rather than derived from
+is_engineering, because the boundary is a product decision and not a property
+of the classifier: product management at a software company is a tech job by
+most readings, and the flag that answers "is this engineering work" cannot
+also answer "is this worth storing".
+
+design is the deliberate omission -- add "design" here if that changes.
+"""
+STORE_FAMILIES = set(
+    os.getenv("ARGUS_STORE_FAMILIES", "engineering,fde,ai,data,security,product").split(",")
+)
+
+"""
 Rows a single diff batch may stage. The board count alone is the wrong
 bound: a hundred Workday boards stages 181,401 postings where a hundred
 Ashby boards stages 1,700, and the first exceeds Postgres's two-minute

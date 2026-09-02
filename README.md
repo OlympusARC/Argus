@@ -198,12 +198,35 @@ building anything.
 | `SUPABASE_DB_PASSWORD` | Postgres. Absent, everything falls back to local SQLite |
 | `SUPABASE_REF`, `SUPABASE_REGION` | compose the connection string; not secret |
 | `ARGUS_DISCORD_WEBHOOK` | the hourly digest. Absent, `notify` prints and exits 0 |
+| `ARGUS_STORE_FAMILIES` | which role families are stored at all (see below) |
 | `GROQ_API_KEY` / `NVIDIA_API_KEY` / `GEMINI_API_KEY` | the agents. Absent, they skip |
 | `GITHUB_TOKEN`, `BRAVE_API_KEY`, `ARGUS_SEC_CONTACT` | individual discovery sources |
 
 Every one is optional. A fresh clone with no configuration at all runs against
 SQLite, skips the sources and agents that need credentials, and says which ones
 it skipped.
+
+### What gets stored
+
+Postings are filtered at ingest, not after. The corpus a board returns is mostly
+retail, clinical and sales work — roughly 80% of it — and storing that spends a
+500 MB budget on postings no query asks for.
+
+Six families are kept: `engineering`, `fde`, `ai`, `data`, `security` and
+`product`. Two are not: `design`, and the `other` catch-all that holds retail,
+clinical, sales, and non-software engineering — mechanical, civil, structural,
+manufacturing.
+
+The set is `ARGUS_STORE_FAMILIES` rather than a property of the classifier,
+because the boundary is a product decision. `is_engineering` answers whether
+something is engineering work; it cannot answer whether a product manager at a
+software company is worth keeping.
+
+The trade is real: a posting that is never stored can never be reclassified, so
+a later ruleset only improves what arrives after it. Every live board is
+re-polled hourly, so a broadened ruleset recovers its misses within a day — but
+set `ARGUS_STORE_ONLY_TECHNICAL=0` before a ruleset change if you would rather
+relabel the corpus than re-fetch it.
 
 Migrations in `supabase/migrations/` are **not** applied automatically by any
 workflow. Apply them with `make db-push` (which runs `supabase db push`) against

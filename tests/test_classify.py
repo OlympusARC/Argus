@@ -427,3 +427,18 @@ def test_words_that_only_look_technical_stay_out():
         "Executive Assistant",
     ):
         assert not classify(title).is_engineering, title
+
+
+def test_offensive_security_titles_are_kept():
+    """'penetration test' with a closing boundary cannot match 'Tester' --
+    the same suffix trap that hid Quantitative Researcher. Caught by checking
+    representative titles per family rather than trusting the patterns."""
+    for title in (
+        "Penetration Tester",
+        "Penetration Testing Lead",
+        "Pentester",
+        "Ethical Hacker",
+        "Senior Penetration Tester",
+    ):
+        r = classify(title)
+        assert r.family == "security" and r.is_engineering, f"{title} -> {r.family}"

@@ -159,7 +159,8 @@ ENGINEERING = re.compile(
 
 SECURITY = re.compile(
     r"\b(security engineer|appsec|infosec|application security|product security|"
-    r"offensive security|penetration test|pentest|red team|blue team|"
+    r"offensive security|penetration[\s-]?test(er|ing)?|pentest(er)?|"
+    r"red team|blue team|ethical hack(er|ing)?|bug bounty|"
     r"threat (intel|detection)|incident response|detection engineer|"
     r"cryptograph|security research(er)?|"
     r"network exploitation|reverse engineer(ing)?|malware|"

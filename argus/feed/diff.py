@@ -208,7 +208,7 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             broadened ruleset recovers its misses within a day -- but it is a
             real trade, which is why it is a setting rather than a constant.
             """
-            if config.STORE_ONLY_TECHNICAL and not (role.is_engineering or role.is_fde):
+            if config.STORE_ONLY_TECHNICAL and role.family not in config.STORE_FAMILIES:
                 skipped += 1
                 continue
             rows.append(

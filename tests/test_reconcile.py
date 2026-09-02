@@ -329,7 +329,7 @@ is never stored matters as much as what is.
 """
 
 
-def test_non_technical_postings_are_never_stored(conn, monkeypatch):
+def test_only_the_named_families_are_stored(conn, monkeypatch):
     monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
     res = reconcile.apply_board(
         conn,
@@ -340,12 +340,34 @@ def test_non_technical_postings_are_never_stored(conn, monkeypatch):
             post("b", title="Retail Sales Associate"),
             post("c", title="Machine Learning Engineer"),
             post("d", title="Delivery Driver"),
-            post("e", title="Registered Nurse"),
+            post("e", title="Product Manager"),
+            post("f", title="Senior Product Designer"),
+            post("g", title="Registered Nurse"),
         ],
     )
     stored = [r["title"] for r in conn.execute("SELECT title FROM jobs ORDER BY external_id")]
-    assert stored == ["Senior Backend Engineer", "Machine Learning Engineer"]
-    assert res.new == 2
+    assert stored == ["Senior Backend Engineer", "Machine Learning Engineer", "Product Manager"]
+    assert res.new == 3
+
+
+def test_the_stored_set_is_configuration_not_a_property_of_the_classifier(conn, monkeypatch):
+    """Product management at a software company is a tech job by most
+    readings, and is_engineering cannot answer that -- it answers whether
+    something is engineering work. The boundary is a separate decision."""
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
+    monkeypatch.setattr(config, "STORE_FAMILIES", {"engineering", "design"})
+    reconcile.apply_board(
+        conn,
+        "ashby",
+        "acme",
+        [
+            post("a", title="Senior Backend Engineer"),
+            post("b", title="Senior Product Designer"),
+            post("c", title="Product Manager"),
+        ],
+    )
+    stored = sorted(r["title"] for r in conn.execute("SELECT title FROM jobs"))
+    assert stored == ["Senior Backend Engineer", "Senior Product Designer"]
 
 
 def test_the_guard_judges_the_fetch_not_the_filter(conn, monkeypatch):
