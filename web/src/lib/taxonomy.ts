@@ -75,7 +75,20 @@ export const SORTS = {
 
 export type SortKey = keyof typeof SORTS;
 
-export const DEFAULT_SORT: SortKey = "seen";
+/**
+ * Newest posting first, which is what someone opening a job board wants.
+ *
+ * It sorts by what the board claims rather than by when this pipeline
+ * noticed, and those are very different orderings right now: the corpus was
+ * ingested in one pass, so first_seen_at is near-identical across 83,682
+ * rows and sorting by it is close to arbitrary.
+ *
+ * The cost is that NULLS LAST puts every undated posting behind every dated
+ * one, so page one is dated rows only. That is the right default -- an
+ * undated posting cannot be shown as recent honestly -- and Seen remains one
+ * click away for anyone who wants the other view.
+ */
+export const DEFAULT_SORT: SortKey = "posted";
 export const DEFAULT_DIR = "desc";
 
 export function parseSort(sort?: string, dir?: string) {
