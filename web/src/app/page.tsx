@@ -29,6 +29,8 @@ export default async function Page({
     family: one("family"),
     seniority: one("seniority"),
     ats: one("ats"),
+    sort: one("sort"),
+    dir: one("dir"),
     page: Number(one("page") ?? 1) || 1,
   };
 

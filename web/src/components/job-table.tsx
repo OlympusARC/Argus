@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortHeader } from "@/components/sort-header";
 import type { Job } from "@/lib/jobs";
 
 /**
@@ -35,7 +36,11 @@ function ago(ts: number | null) {
   return d < 30 ? `${d}d` : `${Math.floor(d / 30)}mo`;
 }
 
-const DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" });
+const DATE = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
 
 /**
  * Posted is the date the board itself claims, so it is shown as a date. Seen
@@ -67,12 +72,24 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
       <Table className="table-fixed">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[34%]">Role</TableHead>
-            <TableHead className="w-[16%]">Company</TableHead>
-            <TableHead className="w-[18%]">Location</TableHead>
-            <TableHead className="w-[12%]">Type</TableHead>
-            <TableHead className="w-[10%] text-right">Posted</TableHead>
-            <TableHead className="w-[8%] text-right">Seen</TableHead>
+            <TableHead className="w-[32%]">
+              <SortHeader column="title">Role</SortHeader>
+            </TableHead>
+            <TableHead className="w-[15%]">
+              <SortHeader column="company">Company</SortHeader>
+            </TableHead>
+            <TableHead className="w-[17%]">Location</TableHead>
+            <TableHead className="w-[11%]">Type</TableHead>
+            <TableHead className="w-[15%] text-right">
+              <SortHeader column="posted" align="right">
+                Posted
+              </SortHeader>
+            </TableHead>
+            <TableHead className="w-[10%] text-right">
+              <SortHeader column="seen" align="right">
+                Seen
+              </SortHeader>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

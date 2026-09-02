@@ -54,5 +54,31 @@ export type Filters = {
   family?: string;
   seniority?: string;
   ats?: string;
+  sort?: string;
+  dir?: string;
   page?: number;
 };
+
+/**
+ * Sortable columns, as an allowlist mapping a URL token to a column.
+ *
+ * A sort key cannot be parameterised -- it is part of the statement, not a
+ * value -- so the only safe way to accept one from a query string is to
+ * refuse anything not named here. Never interpolate the raw token.
+ */
+export const SORTS = {
+  posted: "j.posted_at",
+  seen: "j.first_seen_at",
+  title: "j.title",
+  company: "c.name",
+} as const;
+
+export type SortKey = keyof typeof SORTS;
+
+export const DEFAULT_SORT: SortKey = "seen";
+export const DEFAULT_DIR = "desc";
+
+export function parseSort(sort?: string, dir?: string) {
+  const key: SortKey = sort && sort in SORTS ? (sort as SortKey) : DEFAULT_SORT;
+  return { key, desc: dir !== "asc" };
+}

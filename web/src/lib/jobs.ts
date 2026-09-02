@@ -1,7 +1,7 @@
 import "server-only";
 
 import { query } from "./db";
-import { PAGE_SIZE, type Filters, type Job } from "./taxonomy";
+import { PAGE_SIZE, SORTS, parseSort, type Filters, type Job } from "./taxonomy";
 
 export * from "./taxonomy";
 
@@ -49,6 +49,20 @@ export async function listJobs(f: Filters): Promise<{ jobs: Job[]; hasMore: bool
   const page = Math.max(0, (f.page ?? 1) - 1);
 
   /**
+   * The sort key comes from SORTS, never from the query string. A column
+   * name is part of the statement rather than a value, so it cannot be
+   * parameterised -- the allowlist is the whole defence.
+   *
+   * NULLS LAST in both directions on purpose: 55,172 open roles have no
+   * posted date because Workday and BambooHR publish none, and sorting
+   * ascending should not open with 55,172 blanks. The secondary key keeps
+   * the order stable across pages when the primary ties.
+   */
+  const { key, desc } = parseSort(f.sort, f.dir);
+  const column = SORTS[key];
+  const direction = desc ? "DESC" : "ASC";
+
+  /**
    * One row over the page size, so "is there a next page" costs nothing.
    * A COUNT(*) over a filtered 127k-row table costs a scan and is only ever
    * used to grey out a button.
@@ -61,7 +75,7 @@ export async function listJobs(f: Filters): Promise<{ jobs: Job[]; hasMore: bool
        LEFT JOIN boards b ON b.ats = j.ats AND b.slug = j.slug
        LEFT JOIN companies c ON c.id = b.company_id
       WHERE ${sql}
-      ORDER BY j.first_seen_at DESC NULLS LAST
+      ORDER BY ${column} ${direction} NULLS LAST, j.first_seen_at DESC
       LIMIT $${args.length + 1} OFFSET $${args.length + 2}`,
     [...args, PAGE_SIZE + 1, page * PAGE_SIZE],
   );
