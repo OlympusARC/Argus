@@ -1,0 +1,264 @@
+"""The digest's rules, pinned.
+
+Every test here exists because the failure it prevents is one the reader
+would notice immediately: a first run that replays the entire history, a job
+announced twice, a watermark that advances past jobs a failed webhook never
+delivered.
+"""
+
+import pytest
+
+from argus.core import db
+from argus.feed import notify
+
+
+@pytest.fixture()
+def conn(tmp_path):
+    c = db.init_db(tmp_path / "t.db")
+    c.execute(
+        """INSERT INTO boards (ats, slug, company_name, status, tier, first_seen_at)
+           VALUES ('ashby','acme','Acme','active',1,0)"""
+    )
+    return c
+
+
+def add_job(conn, eid, *, title="Backend Engineer", eng=1, fde=0, loc="NYC"):
+    conn.execute(
+        """INSERT INTO jobs (ats, slug, external_id, title, url, location,
+                             first_seen_at, last_seen_at, status,
+                             is_engineering, is_fde, role_family)
+           VALUES ('ashby','acme',?,?,?,?,0,0,'open',?,?,'engineering')""",
+        (eid, title, f"https://jobs.ashbyhq.com/acme/{eid}", loc, eng, fde),
+    )
+
+
+def add_event(conn, eid, kind="new"):
+    conn.execute(
+        """INSERT INTO events (ts, type, ats, slug, external_id, title, url)
+           VALUES (0, ?, 'ashby','acme', ?, 'Backend Engineer', '')""",
+        (kind, eid),
+    )
+
+
+def seed(conn, n=3, kind="new", **kw):
+    for i in range(n):
+        add_job(conn, f"j{i}", **kw)
+        add_event(conn, f"j{i}", kind)
+
+
+def test_a_fresh_database_announces_nothing(conn):
+    """The most expensive possible bug: 374,647 historical events replayed as
+    though every job had just appeared. A first run seeds the watermark at the
+    current maximum and stays silent."""
+    seed(conn, 5)
+    d = notify.build(conn)
+    assert d.rows == []
+    assert d.to_id == 5, "watermark should seed at the current max, not 0"
+    assert notify.render(d) is None
+
+
+def test_only_events_past_the_watermark_are_sent(conn):
+    seed(conn, 3)
+    notify.set_watermark(conn, 0)
+    assert len(notify.build(conn).rows) == 3
+
+    notify.set_watermark(conn, 2)
+    d = notify.build(conn)
+    assert [r["external_id"] for r in d.rows] == ["j2"]
+
+
+def test_the_watermark_advances_on_an_empty_window(conn):
+    """Otherwise every quiet hour re-scans the same range forever."""
+    seed(conn, 2)
+    notify.set_watermark(conn, 2)
+    d = notify.run(conn, url="http://unused", dry=False)
+    assert d.rows == []
+    assert notify._watermark(conn) == 2
+
+
+def test_non_technical_roles_are_not_announced(conn):
+    add_job(conn, "sales", title="Account Executive", eng=0, fde=0)
+    add_event(conn, "sales")
+    add_job(conn, "eng", title="Backend Engineer", eng=1)
+    add_event(conn, "eng")
+    notify.set_watermark(conn, 0)
+    assert [r["external_id"] for r in notify.build(conn).rows] == ["eng"]
+
+
+def test_fde_is_announced_even_when_not_flagged_engineering(conn):
+    """is_fde is its own axis; a forward-deployed role that did not also match
+    the engineering patterns still belongs in the digest."""
+    add_job(conn, "fde1", title="Forward Deployed Engineer", eng=0, fde=1)
+    add_event(conn, "fde1")
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    assert [r["external_id"] for r in d.rows] == ["fde1"]
+    assert d.fde == 1
+
+
+def test_closed_and_edited_events_are_not_announced(conn):
+    add_job(conn, "j0")
+    for kind in ("edited", "closed"):
+        add_event(conn, "j0", kind)
+    notify.set_watermark(conn, 0)
+    assert notify.build(conn).rows == []
+
+
+def test_a_job_is_announced_once_even_when_it_reopens(conn):
+    """A flapping board emits closed then reopened, repeatedly. The reader
+    wants to hear about the job once -- which is why dedupe keys on the job
+    and not on the event id."""
+    add_job(conn, "j0")
+    add_event(conn, "j0", "new")
+    notify.set_watermark(conn, 0)
+
+    d = notify.build(conn)
+    assert len(d.rows) == 1
+    notify.mark_notified(conn, d.rows)
+    notify.set_watermark(conn, d.to_id)
+
+    add_event(conn, "j0", "reopened")
+    assert notify.build(conn).rows == [], "already announced"
+
+
+def test_dedupe_expires_after_the_window(conn):
+    add_job(conn, "j0")
+    add_event(conn, "j0", "new")
+    notify.set_watermark(conn, 0)
+    stale = notify.now() - notify.DEDUPE_WINDOW - 1
+    conn.execute(
+        """INSERT INTO notified_jobs (ats, slug, external_id, notified_at)
+           VALUES ('ashby','acme','j0',?)""",
+        (stale,),
+    )
+    assert len(notify.build(conn).rows) == 1, "past the window, it is news again"
+
+
+def test_flood_guard_collapses_to_a_summary(conn, monkeypatch):
+    monkeypatch.setattr(notify, "FLOOD_THRESHOLD", 3)
+    seed(conn, 5)
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    assert d.flooded and d.sending == 0
+    payload = notify.render(d)
+    assert "embeds" not in payload
+    assert "5 new engineering roles" in payload["content"]
+
+
+def test_a_failed_send_does_not_advance_the_watermark(conn, monkeypatch):
+    """A dropped webhook must cost a retry, never the jobs."""
+    seed(conn, 2)
+    notify.set_watermark(conn, 0)
+
+    def boom(payload, url):
+        raise RuntimeError("502 from discord")
+
+    monkeypatch.setattr(notify, "send", boom)
+    with pytest.raises(RuntimeError):
+        notify.run(conn, url="http://x")
+    assert notify._watermark(conn) == 0, "watermark held"
+    assert len(notify.build(conn).rows) == 2, "jobs still pending"
+
+
+def test_dry_run_touches_nothing(conn, monkeypatch):
+    seed(conn, 2)
+    notify.set_watermark(conn, 0)
+    monkeypatch.setattr(notify, "send", lambda *a, **k: pytest.fail("dry run must not send"))
+    notify.run(conn, url="http://x", dry=True)
+    assert notify._watermark(conn) == 0
+
+
+def test_payload_stays_inside_discord_limits(conn):
+    """Ten embeds and 6000 characters are hard caps; exceeding either is a
+    400 from the webhook, which would look exactly like a broken notifier."""
+    for i in range(40):
+        conn.execute(
+            """INSERT INTO boards (ats, slug, company_name, status, tier, first_seen_at)
+               VALUES ('ashby',?,?,'active',1,0)""",
+            (f"co{i}", f"Company {i}"),
+        )
+        for k in range(12):
+            conn.execute(
+                """INSERT INTO jobs (ats, slug, external_id, title, url, location,
+                                     first_seen_at, last_seen_at, status,
+                                     is_engineering, is_fde)
+                   VALUES ('ashby',?,?,?,'https://example.com/x','Remote',0,0,'open',1,0)""",
+                (f"co{i}", f"j{k}", "Staff Software Engineer, Platform Infrastructure"),
+            )
+            conn.execute(
+                """INSERT INTO events (ts, type, ats, slug, external_id, title, url)
+                   VALUES (0,'new','ashby',?,?,'x','')""",
+                (f"co{i}", f"j{k}"),
+            )
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    d.flooded = False  # exercise the embed path regardless of the guard
+    payload = notify.render(d)
+    assert len(payload["embeds"]) <= 10
+    total = len(payload["content"]) + sum(
+        len(e["title"]) + len(e["description"]) for e in payload["embeds"]
+    )
+    assert total < 6000, f"payload {total} chars exceeds Discord's limit"
+    assert "more companies not shown" in payload["content"]
+
+
+def test_rows_are_newest_first(conn):
+    seed(conn, 3)
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    assert [r["id"] for r in d.rows] == [3, 2, 1]
+    assert d.to_id == 3, "watermark still takes the maximum, not the first row"
+
+
+def test_a_204_with_no_body_counts_as_delivered(monkeypatch):
+    """Discord answers 204 No Content. post_json would call r.json() on that
+    and raise, so every successful delivery would look like a failure --
+    watermark stuck, same jobs resent every hour, forever. The one path
+    --dry-run cannot reach, so it is pinned here."""
+    from unittest.mock import MagicMock, patch
+
+    from argus.core import http
+
+    r = MagicMock(status_code=204, text="")
+    r.json.side_effect = ValueError("no body")
+    with patch.object(http.session(), "post", return_value=r):
+        assert http.post_nobody("https://discord.com/api/webhooks/x", json={}) == 204
+
+
+def test_a_webhook_error_is_still_an_error(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from argus.core import http
+    from argus.core.models import FetchError
+
+    r = MagicMock(status_code=400, text="invalid embed")
+    with (
+        patch.object(http.session(), "post", return_value=r),
+        pytest.raises(FetchError, match="400"),
+    ):
+        http.post_nobody("https://discord.com/api/webhooks/x", json={})
+
+
+def test_rate_limit_waits_then_succeeds(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from argus.core import http
+
+    limited = MagicMock(status_code=429, text="", headers={"Retry-After": "0.01"})
+    ok = MagicMock(status_code=204, text="", headers={})
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    with patch.object(http.session(), "post", side_effect=[limited, ok]) as m:
+        assert http.post_nobody("https://discord.com/api/webhooks/x", json={}) == 204
+    assert m.call_count == 2
+
+
+def test_prune_drops_only_expired_dedupe_rows(conn):
+    fresh, stale = notify.now(), notify.now() - notify.DEDUPE_WINDOW - 1
+    conn.executemany(
+        """INSERT INTO notified_jobs (ats, slug, external_id, notified_at)
+           VALUES ('ashby','acme',?,?)""",
+        [("keep", fresh), ("drop", stale)],
+    )
+    notify.prune(conn)
+    left = [r["external_id"] for r in conn.execute("SELECT external_id FROM notified_jobs")]
+    assert left == ["keep"]
