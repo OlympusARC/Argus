@@ -76,7 +76,7 @@ def test_only_a_positive_elsewhere_is_refused():
     """The policy keeps four regions of five. `other` is the only one that
     asserts the job is somewhere we do not want -- everything else merely
     failed to say, and a posting refused at ingest cannot be reconsidered."""
-    assert config.STORE_REGIONS == {"us", "europe", "remote", "unknown"}
+    assert {"us", "europe", "remote", "unknown"} == config.STORE_REGIONS
     assert geo.in_target("San Francisco")
     assert geo.in_target("Berlin")
     assert geo.in_target("Remote")

@@ -230,31 +230,149 @@ def adopt_boards(conn: sqlite3.Connection, limit: int | None = None) -> dict[str
 
 
 def add_many(conn: sqlite3.Connection, records: Iterable[dict], source: str) -> dict[str, int]:
-    """Bulk-add companies from a harvest. Each record: name/domain/website/careers_url."""
-    seen = made = 0
+    """Bulk-add companies from a harvest. Each record: name/domain/website/careers_url.
+
+    upsert2 resolves one company with two or three SELECTs and a write, which
+    is right for one company and ruinous for a harvest: at roughly 90ms a
+    round trip it measured 0.26s per record, and a single job-list repo holds
+    19,466 of them. Discovery spent its entire time waiting.
+
+    So the identity rules move into Python and the database is asked twice.
+    The rules themselves are unchanged, and the tests that pin them do not
+    know this function was rewritten.
+    """
+    recs = list(records)
+    seen = len(recs)
+    if not recs:
+        return {"seen": 0, "new_companies": 0}
+
+    """
+    Resolve each record to the pair identity actually turns on, and collapse
+    duplicates. A harvest names the same employer once per posting, so a batch
+    of 500 refs is usually a few dozen companies.
+    """
+    prepared = []
+    for rec in recs:
+        domain = apex(rec.get("domain")) or apex(rec.get("website"))
+        nn = norm(rec.get("name") or "")
+        if not domain and not nn:
+            continue
+        prepared.append((domain, nn, rec))
+
+    unique: dict[tuple[str | None, str], dict] = {}
+    boards: list[tuple[tuple[str | None, str], tuple]] = []
+    for domain, nn, rec in prepared:
+        key = (domain, nn)
+        keep = unique.setdefault(key, rec)
+        """
+        Merge what the duplicates know rather than taking the first blindly:
+        one row may carry the careers page and another the website.
+        """
+        for col in ("name", "website", "careers_url", "domain"):
+            if not keep.get(col) and rec.get(col):
+                keep[col] = rec[col]
+        if rec.get("board"):
+            boards.append((key, rec["board"]))
+
+    domains = {d for d, _ in unique if d}
+    names = {n for _, n in unique if n}
+
+    by_domain: dict[str, int] = {}
+    by_name: dict[str, tuple[int, str | None]] = {}
+    if domains:
+        ph = ",".join("?" * len(domains))
+        for r in conn.execute(
+            f"SELECT id, domain FROM companies WHERE domain IN ({ph})", tuple(domains)
+        ):
+            by_domain[r["domain"]] = r["id"]
+    if names:
+        ph = ",".join("?" * len(names))
+        """
+        Domain-bearing rows first, matching upsert2's ORDER BY: merging a
+        name-only row into one that has a domain is what stops the same
+        company existing twice.
+        """
+        for r in conn.execute(
+            f"""SELECT id, norm_name, domain FROM companies
+                WHERE norm_name IN ({ph})
+                ORDER BY domain IS NULL DESC, id DESC""",
+            tuple(names),
+        ):
+            by_name[r["norm_name"]] = (r["id"], r["domain"])
+
+    resolved: dict[tuple[str | None, str], int] = {}
+    updates, inserts = [], []
+    for (domain, nn), rec in unique.items():
+        cid = by_domain.get(domain) if domain else None
+        if cid is None and nn:
+            hit = by_name.get(nn)
+            """
+            A name match is rejected when the row already claims a different
+            domain -- two companies can share a name, and merging them loses
+            both.
+            """
+            if hit and not (domain and hit[1] and hit[1] != domain):
+                cid = hit[0]
+
+        website = rec.get("website") or (f"https://{domain}" if domain else None)
+        if cid is None:
+            inserts.append(((domain, nn), rec, website))
+        else:
+            resolved[(domain, nn)] = cid
+            updates.append(
+                (domain, rec.get("name"), nn or None, website, rec.get("careers_url"), cid)
+            )
+
     conn.execute("BEGIN")
     try:
-        for rec in records:
-            seen += 1
-            cid, created = upsert2(
-                conn,
-                domain=rec.get("domain"),
-                name=rec.get("name"),
-                website=rec.get("website"),
-                careers_url=rec.get("careers_url"),
-                source=source,
+        if updates:
+            conn.executemany(
+                """UPDATE companies SET
+                       domain      = COALESCE(domain, ?),
+                       name        = COALESCE(name, ?),
+                       norm_name   = COALESCE(norm_name, ?),
+                       website     = COALESCE(website, ?),
+                       careers_url = COALESCE(careers_url, ?)
+                   WHERE id = ?""",
+                updates,
             )
-            if cid is None:
-                continue
-            made += created
-            board = rec.get("board")
-            if board:
-                link_board(conn, board[0], board[1], cid)
+
+        """
+        Inserts stay one at a time: each needs its generated id to link a
+        board, and they are the rare case -- a mature registry resolves almost
+        every harvested name to a row it already has.
+        """
+        ts = now()
+        for key, rec, website in inserts:
+            resolved[key] = db.insert_id(
+                conn,
+                """INSERT INTO companies (domain, name, norm_name, website, careers_url,
+                                          first_seen_at, source)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    key[0],
+                    rec.get("name"),
+                    key[1] or None,
+                    website,
+                    rec.get("careers_url"),
+                    ts,
+                    source,
+                ),
+            )
+
+        links = [
+            (resolved[key], board[0], board[1]) for key, board in boards if key in resolved
+        ]
+        if links:
+            conn.executemany(
+                "UPDATE boards SET company_id=? WHERE ats=? AND slug=? AND company_id IS NULL",
+                links,
+            )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
-    return {"seen": seen, "new_companies": made}
+    return {"seen": seen, "new_companies": len(inserts)}
 
 
 def needing_careers(

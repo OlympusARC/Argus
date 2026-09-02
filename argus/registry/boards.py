@@ -24,44 +24,88 @@ def add_boards(
     explicit re-validation can revive it. Otherwise a noisy source would keep
     resurrecting slugs we have already proven do not exist.
     """
+    """
+    Batched, because this is the hot path of every discovery source and the
+    work is not the work -- it is the latency. Per ref this did a SELECT, an
+    INSERT and another INSERT: three round trips to Postgres at about 90ms
+    each, measured at 0.27s per ref. One job-list repo holds 19,466 rows and
+    the source reads eleven of them, so simplify alone projected to 25 hours
+    of waiting for a few seconds of computation.
+
+    Four statements per batch instead of three per row. The two SELECTs
+    exist because the counts are the point: a source is judged on how many
+    boards it contributed that nobody had, so `new_boards` has to distinguish
+    an insert from a no-op upsert, and ON CONFLICT does not report which
+    happened.
+    """
     ts = now()
-    seen = added = links = 0
+    items = list(refs)
+    seen = len(items)
+    if not items:
+        return {"seen": 0, "new_boards": 0, "new_links": 0}
+
+    """
+    A batch can name the same board twice -- two repos listing one company --
+    and counting it twice would overstate the yield.
+    """
+    by_key: dict[tuple[str, str], object] = {}
+    for ref in items:
+        by_key.setdefault((ref.ats, ref.slug), ref)
+    keys = list(by_key)
+    flat = [x for k in keys for x in k]
+    ph = ",".join("(?,?)" for _ in keys)
+
     cur = conn.cursor()
     cur.execute("BEGIN")
     try:
-        for ref in refs:
-            seen += 1
-            before = cur.execute(
-                "SELECT 1 FROM boards WHERE ats=? AND slug=?", (ref.ats, ref.slug)
-            ).fetchone()
-            cur.execute(
-                """INSERT INTO boards (ats, slug, company_name, status, tier,
-                                       next_poll_at, first_seen_at, website, careers_url)
-                   VALUES (?, ?, ?, 'unvalidated', ?, ?, ?, ?, ?)
-                   ON CONFLICT(ats, slug) DO UPDATE SET
-                       company_name = COALESCE(boards.company_name, excluded.company_name),
-                       website      = COALESCE(boards.website,      excluded.website),
-                       careers_url  = COALESCE(boards.careers_url,  excluded.careers_url)""",
+        existing = {
+            (r["ats"], r["slug"])
+            for r in cur.execute(
+                f"SELECT ats, slug FROM boards WHERE (ats, slug) IN ({ph})", tuple(flat)
+            ).fetchall()
+        }
+        linked = {
+            (r["ats"], r["slug"])
+            for r in cur.execute(
+                f"""SELECT ats, slug FROM board_sources
+                    WHERE source = ? AND (ats, slug) IN ({ph})""",
+                (source, *flat),
+            ).fetchall()
+        }
+        added = sum(1 for k in keys if k not in existing)
+        links = sum(1 for k in keys if k not in linked)
+
+        cur.executemany(
+            """INSERT INTO boards (ats, slug, company_name, status, tier,
+                                   next_poll_at, first_seen_at, website, careers_url)
+               VALUES (?, ?, ?, 'unvalidated', ?, ?, ?, ?, ?)
+               ON CONFLICT(ats, slug) DO UPDATE SET
+                   company_name = COALESCE(boards.company_name, excluded.company_name),
+                   website      = COALESCE(boards.website,      excluded.website),
+                   careers_url  = COALESCE(boards.careers_url,  excluded.careers_url)""",
+            [
                 (
-                    ref.ats,
-                    ref.slug,
-                    ref.company_name,
+                    r.ats,
+                    r.slug,
+                    r.company_name,
                     config.DEFAULT_TIER,
                     ts,
                     ts,
-                    ref.website,
-                    ref.careers_url,
-                ),
-            )
-            if before is None:
-                added += 1
-            cur.execute(
-                """INSERT INTO board_sources (ats, slug, source, first_seen_at, detail)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT (ats, slug, source) DO NOTHING""",
-                (ref.ats, ref.slug, source, ts, json.dumps(ref.detail) if ref.detail else None),
-            )
-            links += cur.rowcount
+                    r.website,
+                    r.careers_url,
+                )
+                for r in by_key.values()
+            ],
+        )
+        cur.executemany(
+            """INSERT INTO board_sources (ats, slug, source, first_seen_at, detail)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (ats, slug, source) DO NOTHING""",
+            [
+                (r.ats, r.slug, source, ts, json.dumps(r.detail) if r.detail else None)
+                for r in by_key.values()
+            ],
+        )
         cur.execute("COMMIT")
     except Exception:
         cur.execute("ROLLBACK")
