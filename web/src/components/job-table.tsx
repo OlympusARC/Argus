@@ -72,20 +72,20 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
       <Table className="table-fixed">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[32%]">
+            <TableHead className="w-[44%]">
               <SortHeader column="title">Role</SortHeader>
             </TableHead>
-            <TableHead className="w-[15%]">
+            <TableHead className="w-[14%]">
               <SortHeader column="company">Company</SortHeader>
             </TableHead>
-            <TableHead className="w-[17%]">Location</TableHead>
-            <TableHead className="w-[11%]">Type</TableHead>
-            <TableHead className="w-[15%] text-right">
+            <TableHead className="w-[16%]">Location</TableHead>
+            <TableHead className="w-[8%]">Type</TableHead>
+            <TableHead className="w-[11%] text-right">
               <SortHeader column="posted" align="right">
                 Posted
               </SortHeader>
             </TableHead>
-            <TableHead className="w-[10%] text-right">
+            <TableHead className="w-[7%] text-right">
               <SortHeader column="seen" align="right">
                 Seen
               </SortHeader>
@@ -110,7 +110,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                   <span className="font-medium">{j.title}</span>
                 )}
                 {j.seniority && (
-                  <span className="ml-2 text-xs text-muted-foreground capitalize">
+                  <span className="ml-2 text-xs whitespace-nowrap text-muted-foreground/70 capitalize">
                     {j.seniority.replace("_", " ")}
                   </span>
                 )}
