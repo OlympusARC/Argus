@@ -28,3 +28,4 @@ htmlcov/
 .idea/
 .vscode/
 prune_corpus.py
+prune_stale.py

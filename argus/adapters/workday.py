@@ -24,6 +24,7 @@ have, and a board larger than max_jobs raises rather than truncating.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from ..core import http
@@ -33,6 +34,42 @@ from .base import Adapter
 API = "https://{host}/wday/cxs/{tenant}/{site}/jobs"
 PAGE = 20  # server-enforced; larger values 400
 _REQ_ID = re.compile(r"_([A-Za-z0-9-]+)$")
+
+
+"""
+Workday states a posting's age relative to the moment you ask -- "Posted
+Today", "Posted 5 Days Ago" -- rather than giving a date. Discarding it left
+54,843 open roles with no posted date at all, which is most of the corpus
+that has none.
+
+An age plus the time of the request is a date, so the exact forms are
+converted. "Posted 30+ Days Ago" is not converted: it means at least thirty
+days and says nothing about the ceiling, so it covers a posting from last
+month and one from 2019 equally. Storing now-30d for those would invent a
+precision the source does not have, and the age filter would then trust it.
+
+Safe to compute at fetch time because posted_at is not part of _HASHED: the
+value is written when the row is inserted and a later poll seeing "6 Days
+Ago" instead of "5" does not rewrite it.
+"""
+_RELATIVE = re.compile(r"posted\s+(today|yesterday|(\d+)\s+days?\s+ago)\s*$", re.I)
+
+
+def posted_from_relative(text: str | None, now: float | None = None) -> int | None:
+    """An epoch from Workday's relative phrasing, or None when it is unbounded."""
+    if not text:
+        return None
+    m = _RELATIVE.search(text.strip())
+    if not m:
+        return None
+    word = m.group(1).lower()
+    if word == "today":
+        days = 0
+    elif word == "yesterday":
+        days = 1
+    else:
+        days = int(m.group(2))
+    return int((now if now is not None else time.time()) - days * 86400)
 
 
 def split_slug(slug: str) -> tuple[str, str, str]:
@@ -127,9 +164,7 @@ class WorkdayAdapter(Adapter):
                     url=f"https://{host}/{site}{path}" if path else f"https://{host}/{site}",
                     location=location,
                     locations=[location] if location else [],
-                    # postedOn is relative text ("Posted Today"), not a date, so
-                    # there is nothing honest to store as an epoch.
-                    posted_at=None,
+                    posted_at=posted_from_relative(j.get("postedOn")),
                     raw={
                         "externalPath": path,
                         "postedOn": j.get("postedOn"),

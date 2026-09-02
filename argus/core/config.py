@@ -150,6 +150,20 @@ reversible; not storing the row is not.
 STORE_REGIONS = set(os.getenv("ARGUS_STORE_REGIONS", "us,europe,remote,unknown").split(","))
 
 """
+The oldest posting worth storing, as a unix epoch. 0 disables the check.
+
+A posting the board still lists but dates to 2019 is not a live job; some
+employers never take a listing down. Before this, 16% of the corpus was over
+a year old and the oldest still-open posting was dated 2009.
+
+Absence is not age. A posting with no date is kept, by the same argument the
+region filter uses: Workday's "Posted 30+ Days Ago" and BambooHR's silence
+are not evidence of anything, and refusing on them would discard most of two
+ATSs on no evidence at all.
+"""
+STORE_POSTED_AFTER = int(os.getenv("ARGUS_STORE_POSTED_AFTER", "1782864000"))
+
+"""
 Rows a single diff batch may stage. The board count alone is the wrong
 bound: a hundred Workday boards stages 181,401 postings where a hundred
 Ashby boards stages 1,700, and the first exceeds Postgres's two-minute

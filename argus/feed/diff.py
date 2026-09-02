@@ -224,6 +224,19 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             if not geo.in_target(p.location):
                 skipped += 1
                 continue
+
+            """
+            And the same test on when it was posted. Only a date the board
+            actually gave us can fail this -- a posting that states no date
+            is kept, exactly as one that states no location is.
+            """
+            if (
+                config.STORE_POSTED_AFTER
+                and p.posted_at
+                and p.posted_at < config.STORE_POSTED_AFTER
+            ):
+                skipped += 1
+                continue
             rows.append(
                 (
                     ats,

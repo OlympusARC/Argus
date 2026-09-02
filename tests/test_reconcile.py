@@ -32,7 +32,7 @@ def conn(tmp_path):
     return c
 
 
-def post(eid, title="Engineer", location="NYC"):
+def post(eid, title="Engineer", location="NYC", posted_at=None):
     return Posting(
         ats="ashby",
         slug="acme",
@@ -40,6 +40,7 @@ def post(eid, title="Engineer", location="NYC"):
         title=title,
         url=f"https://jobs.ashbyhq.com/acme/{eid}",
         location=location,
+        posted_at=posted_at,
     )
 
 
@@ -407,3 +408,61 @@ def test_filtering_can_be_turned_off(conn, monkeypatch):
     monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", False)
     reconcile.apply_board(conn, "ashby", "acme", [post("a", title="Retail Sales Associate")])
     assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 1
+
+
+"""
+The age filter, and the relative dates that feed it.
+"""
+
+
+def test_a_posting_older_than_the_cutoff_is_not_stored(conn, monkeypatch):
+    """16% of the corpus was over a year old and the oldest still-open
+    posting was dated 2009. A board that never takes a listing down should
+    not be able to fill the table with them."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 1_782_864_000)
+    diff.run_batch(
+        conn,
+        {
+            ("ashby", "acme"): [
+                post("1", posted_at=1_600_000_000),
+                post("2", posted_at=1_790_000_000),
+            ]
+        },
+    )
+    kept = [r["external_id"] for r in conn.execute("SELECT external_id FROM jobs")]
+    assert kept == ["2"]
+
+
+def test_a_posting_with_no_date_is_kept(conn, monkeypatch):
+    """Absence is not age. Workday's "Posted 30+ Days Ago" and BambooHR's
+    silence are not evidence, and refusing on them would discard most of two
+    ATSs on none."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 1_782_864_000)
+    diff.run_batch(conn, {("ashby", "acme"): [post("3", posted_at=None)]})
+    assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 1
+
+
+def test_workday_relative_dates_become_epochs():
+    """Workday states an age relative to the request rather than a date, so
+    the age plus the request time is the date."""
+    from argus.adapters.workday import posted_from_relative
+
+    now = 1_788_400_000
+    assert posted_from_relative("Posted Today", now) == now
+    assert posted_from_relative("Posted Yesterday", now) == now - 86_400
+    assert posted_from_relative("Posted 5 Days Ago", now) == now - 5 * 86_400
+
+
+def test_thirty_plus_days_is_not_a_date():
+    """It means at least thirty days and nothing about the ceiling, so it
+    covers last month and 2019 equally. Storing now-30d would invent a
+    precision the source does not have -- and the age filter would trust it."""
+    from argus.adapters.workday import posted_from_relative
+
+    assert posted_from_relative("Posted 30+ Days Ago", 1_788_400_000) is None
+    assert posted_from_relative(None) is None
+    assert posted_from_relative("nonsense") is None
