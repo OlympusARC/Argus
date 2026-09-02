@@ -25,7 +25,7 @@ const ANY = "__any";
  * be filtered there. It also makes every view linkable, which is the point of
  * a dashboard someone wants to share.
  */
-export function Filters({ total, filtered }: { total: number; filtered: boolean }) {
+export function Filters({ total }: { total: number }) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
@@ -108,7 +108,7 @@ export function Filters({ total, filtered }: { total: number; filtered: boolean 
         className="text-xs text-muted-foreground tabular-nums transition-opacity"
         style={{ opacity: pending ? 0.4 : 1 }}
       >
-        {total.toLocaleString()} {filtered ? "matching" : "open"}{" "}
+        {total.toLocaleString()} {active.length > 0 ? "matching" : "open"}{" "}
         {total === 1 ? "role" : "roles"}
       </p>
     </div>

@@ -26,7 +26,7 @@ export function Header() {
     <header className="fixed inset-x-0 top-0 z-30 w-full px-2">
       <div
         className={cn(
-          "mx-auto mt-2 max-w-6xl px-6 transition-all duration-300 lg:px-10",
+          "mx-auto mt-2 px-4 transition-all duration-300 sm:px-6",
           scrolled &&
             "max-w-3xl rounded-2xl border border-white/10 bg-black/60 shadow-lg shadow-black/40 backdrop-blur-xl lg:px-5",
         )}

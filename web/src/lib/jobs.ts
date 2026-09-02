@@ -28,16 +28,14 @@ function where(f: Filters): { sql: string; args: unknown[] } {
 }
 
 /**
- * The matching count, and only when something is filtered.
+ * How many rows match, filtered or not.
  *
- * An unfiltered COUNT(*) over 127k rows is a sequential scan to tell the
- * reader a number the stat bar already shows. With a filter applied the
- * count rides the same index the listing does, so it is cheap -- and that is
- * exactly when the number stops being obvious.
+ * This was conditional while a stat bar showed the corpus size; with that
+ * gone it is the only statement of how large the result is, so it always
+ * runs. Measured at 128 ms unfiltered against 127k rows, and faster with a
+ * filter, since then it rides the same index the listing does.
  */
-export async function countJobs(f: Filters): Promise<number | null> {
-  const hasFilter = Boolean(f.family || f.seniority || f.ats || f.q);
-  if (!hasFilter) return null;
+export async function countJobs(f: Filters): Promise<number> {
   const { sql, args } = where(f);
   const [row] = await query<{ n: string }>(
     `SELECT COUNT(*) n FROM jobs j WHERE ${sql}`,
@@ -69,36 +67,4 @@ export async function listJobs(f: Filters): Promise<{ jobs: Job[]; hasMore: bool
   );
 
   return { jobs: rows.slice(0, PAGE_SIZE), hasMore: rows.length > PAGE_SIZE };
-}
-
-export type Stats = {
-  total: number;
-  families: { role_family: string; n: number }[];
-  boards: number;
-  companies: number;
-};
-
-export async function getStats(): Promise<Stats> {
-  /**
-   * Boards rather than "new today". The corpus was last rebuilt in one pass,
-   * so every posting shares a first_seen_at inside the same day and the
-   * arrivals figure reads as the whole table -- true, and useless. It becomes
-   * a real number once hourly polling has been running longer than a day.
-   */
-  const [[total], families, [boards], [companies]] = await Promise.all([
-    query<{ n: string }>("SELECT COUNT(*) n FROM jobs WHERE status = 'open'"),
-    query<{ role_family: string; n: string }>(
-      `SELECT role_family, COUNT(*) n FROM jobs WHERE status = 'open'
-        GROUP BY role_family ORDER BY n DESC`,
-    ),
-    query<{ n: string }>("SELECT COUNT(*) n FROM boards WHERE status = 'active'"),
-    query<{ n: string }>("SELECT COUNT(*) n FROM companies"),
-  ]);
-
-  return {
-    total: Number(total.n),
-    boards: Number(boards.n),
-    companies: Number(companies.n),
-    families: families.map((r) => ({ role_family: r.role_family, n: Number(r.n) })),
-  };
 }
