@@ -8,7 +8,7 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-Needs one variable, in `web/.env.local`:
+Needs one variable, in `web-app/.env.local`:
 
 ```
 DATABASE_URL=postgresql://…@aws-0-<region>.pooler.supabase.com:6543/postgres
