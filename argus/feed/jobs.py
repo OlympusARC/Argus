@@ -193,27 +193,39 @@ def reclassify(conn: sqlite3.Connection, batch: int = 20_000) -> dict[str, int]:
         ).fetchall()
         if not rows:
             break
+        """
+        One statement for the batch, not one per row. Classification is pure
+        CPU and takes microseconds; the update is a network round trip to
+        Postgres and takes milliseconds, so a per-row UPDATE made the sweep
+        entirely latency -- 182,630 round trips, measured at four and a half
+        hours for a job whose actual work is seconds.
+        """
+        params = []
+        for r in rows:
+            role = classify(r["title"])
+            seen += 1
+            changed += role.family != r["role_family"]
+            params.append(
+                (
+                    role.family,
+                    int(role.is_engineering),
+                    int(role.is_fde),
+                    role.seniority,
+                    role.ruleset,
+                    r["ats"],
+                    r["slug"],
+                    r["external_id"],
+                )
+            )
+
         conn.execute("BEGIN")
         try:
-            for r in rows:
-                role = classify(r["title"])
-                seen += 1
-                changed += role.family != r["role_family"]
-                conn.execute(
-                    """UPDATE jobs SET role_family=?, is_engineering=?, is_fde=?,
-                                       seniority=?, classified_by=?
-                       WHERE ats=? AND slug=? AND external_id=?""",
-                    (
-                        role.family,
-                        int(role.is_engineering),
-                        int(role.is_fde),
-                        role.seniority,
-                        role.ruleset,
-                        r["ats"],
-                        r["slug"],
-                        r["external_id"],
-                    ),
-                )
+            conn.executemany(
+                """UPDATE jobs SET role_family=?, is_engineering=?, is_fde=?,
+                                   seniority=?, classified_by=?
+                   WHERE ats=? AND slug=? AND external_id=?""",
+                params,
+            )
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")

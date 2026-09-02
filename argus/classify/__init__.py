@@ -22,7 +22,7 @@ from dataclasses import dataclass
 Bump on any change to the patterns below. Rows carry this, so a sweep can
 find exactly what is stale.
 """
-RULESET = "r2"
+RULESET = "r3"
 
 """
 Hard exclusions come first. The corpus is dominated by Workday enterprise
@@ -40,6 +40,10 @@ SOFTWARE_SIGNAL = re.compile(
     r"java|python|golang|typescript|kotlin|scala|"
     r"sql|postgres|mysql|oracle|hadoop|"
     r"dba|sysadmin|api|backend|frontend|"
+    # Rescues for the discipline exclusions below. "Quality Engineer" is
+    # usually a factory job and "Validation Engineer" usually a lab one, but
+    # SDET, QA and firmware versions of both are ours.
+    r"qa|sdet|test[\s-]?automation|robotics?|site[\s-]?reliability|"
     r"server[\s-]?(engineer|administrator|side))\b"
     r"|\b(c\+\+|c#|\.net)",
     re.I,
@@ -55,11 +59,82 @@ NOT_TECHNICAL = re.compile(
     r"teacher|tutor|professor|lecturer|substitute|"
     r"security guard|police|firefighter|paramedic|"
     r"plumber|electrician apprentice|hvac|welder|machinist|carpenter|"
-    r"weld(ing|er)[\s-]?engineer|manufacturing[\s-]?engineer|"
-    r"mechanical[\s-]?engineer|civil[\s-]?engineer|structural[\s-]?engineer|"
-    r"industrial[\s-]?engineer|chemical[\s-]?engineer|petroleum[\s-]?engineer|"
-    r"mining[\s-]?engineer|environmental[\s-]?engineer|"
     r"field[\s-]?service[\s-]?technician|maintenance[\s-]?technician)\b",
+    re.I,
+)
+
+r"""
+Engineering that is not software engineering.
+
+The bare token `engineer` in ENGINEERING matches every engineering discipline
+there is, so this decides which ones are ours. It replaces a list of
+`mechanical[\s-]?engineer` style alternatives that carried a trailing \b and
+therefore could not match the -ing form: "Mechanical Engineer" was excluded
+and "Mechanical Engineering" was not, which is how 235 adjunct teaching posts
+arrived in the digest. Matching `engineer\w*` covers engineer, engineering
+and engineers at once.
+
+A discipline here is still rescued by an explicit software signal, because a
+manufacturing systems software engineer is ours and a manufacturing engineer
+is not. The qualifiers left out are as considered as the ones in: `design`
+splits evenly between mechanical and product work, and `reliability` would
+have taken Site Reliability Engineer with it.
+"""
+NON_SOFTWARE_ENG = re.compile(
+    r"\b(mechanical|electrical|electro[\s-]?mechanical|electronics?|"
+    r"civil|structural|chemical|industrial|manufacturing|process|"
+    r"aerospace|aeronautical|astronautical|biomedical|bio[\s-]?medical|"
+    r"petroleum|mining|geological|geotechnical|environmental|nuclear|"
+    r"agricultural|marine|automotive|materials|metallurg\w*|"
+    r"welding|packaging|corrosion|drilling|reservoir|thermal|"
+    r"optical|acoustic|propulsion|hydraulic|pneumatic|"
+    r"fire[\s-]?protection|architectural|continuous[\s-]?improvement|"
+    r"facilities|maintenance|equipment|production|safety|quality|"
+    r"project|controls?|validation|calibration|metrology|supplier|"
+    r"service|plant|tooling|molding|moulding|textile|water|wastewater)"
+    r"[\s-]+engineer\w*\b",
+    re.I,
+)
+
+"""
+Teaching about a subject is not working in it.
+
+Unconditional, and the only exclusion that is: an adjunct professor of
+computer science carries every software signal there is and is still a
+teaching job. Running this before the software rescue is the whole point --
+"Adjunct Instructor in Generative AI and Large Language Models" would
+otherwise be filed under ai.
+"""
+ACADEMIC = re.compile(
+    r"\b(adjunct|faculty|professor|lecturer|instructor|"
+    r"post[\s-]?doc\w*|post[\s-]?doctoral|tenure[\s-]?track|"
+    r"teaching[\s-]?(assistant|associate|fellow)|visiting[\s-]?scholar)\b",
+    re.I,
+)
+
+"""
+Selling a technology is not building it.
+
+Checked after FDE and never before it: a sales engineer, a technical
+account manager and a presales solutions architect are forward-deployed
+roles and belong in that family. Unconditional once past it, with no
+software rescue -- naming a technology is what a technology salesperson
+does. What this catches is the layer around them -- "AWS
+Presales Specialist", "Partner Development Manager - AWS" -- which reach
+ENGINEERING only because it lists `aws` as a bare token.
+"""
+SALES = re.compile(
+    r"\b(account[\s-]?(executive|manager)|business[\s-]?development|"
+    # bdm and bdr are unambiguous; sdr is software-defined radio as often as
+    # it is a sales development rep -- "DSP / SDR Receiver Engineer" is ours.
+    r"bdm|bdr|"
+    r"sales[\s-]?(rep(resentative)?|manager|director|specialist|associate|"
+    r"consultant|executive|lead|operations)|"
+    r"pre[\s-]?sales[\s-]?(specialist|consultant|manager|representative)|"
+    r"partner[\s-]?(development|manager)|"
+    r"channel[\s-]?(sales|partner|manager)|"
+    r"territory[\s-]?manager|inside[\s-]?sales|field[\s-]?sales|"
+    r"revenue[\s-]?operations)\b",
     re.I,
 )
 
@@ -246,13 +321,43 @@ def classify(title: str | None, department: str | None = None) -> Role:
     level = seniority_of(title or "")
 
     """
+    Teaching first, and unconditionally. An adjunct professor of computer
+    science carries every software signal there is; the rescue below would
+    put them in engineering.
+    """
+    if ACADEMIC.search(text):
+        return Role("other", False, False, level)
+
+    """
+    Forward-deployed before the remaining exclusions, not after. A sales
+    engineer and a presales solutions architect are this family, and SALES
+    would otherwise take them on their way past.
+    """
+    if FDE.search(text):
+        return Role("fde", True, True, level)
+
+    """
     An exclusion never beats an explicit software signal: a manufacturing
     engineer is out, a manufacturing systems software engineer is in.
     """
-    if NOT_TECHNICAL.search(text) and not SOFTWARE_SIGNAL.search(text):
+    """
+    Sales is excluded outright, like teaching and unlike the disciplines. The
+    software rescue exists because a manufacturing systems software engineer
+    builds software; a business development manager for Kubernetes does not,
+    however many technologies the title names. The roles that both sell and
+    build are forward-deployed, and they were decided above.
+    """
+    if SALES.search(text):
         return Role("other", False, False, level)
-    if FDE.search(text):
-        return Role("fde", True, True, level)
+
+    """
+    An exclusion never beats an explicit software signal: a manufacturing
+    engineer is out, a manufacturing systems software engineer is in.
+    """
+    if (
+        NOT_TECHNICAL.search(text) or NON_SOFTWARE_ENG.search(text)
+    ) and not SOFTWARE_SIGNAL.search(text):
+        return Role("other", False, False, level)
     if SECURITY.search(text):
         return Role("security", True, False, level)
     if AI.search(text):

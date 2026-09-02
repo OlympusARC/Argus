@@ -26,7 +26,7 @@ shipped one rather than an approximation of it.
 
 from __future__ import annotations
 
-from ..classify import classify
+from ..classify import classify, geo
 from ..core import config
 from ..core.models import Posting
 from . import jobs as jobs_mod
@@ -209,6 +209,19 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             real trade, which is why it is a setting rather than a constant.
             """
             if config.STORE_ONLY_TECHNICAL and role.family not in config.STORE_FAMILIES:
+                skipped += 1
+                continue
+
+            """
+            And the same test on where the job is, for the same reason and at
+            the same cost. The region policy is far more permissive than the
+            family one: it rejects only a posting that names somewhere
+            outside the target, and keeps every posting that simply does not
+            say. A location field is optional in most ATS schemas, and 9.6%
+            of the corpus leaves it empty -- refusing those would discard
+            every posting from a board whose ATS never fills it in.
+            """
+            if not geo.in_target(p.location):
                 skipped += 1
                 continue
             rows.append(

@@ -442,3 +442,124 @@ def test_offensive_security_titles_are_kept():
     ):
         r = classify(title)
         assert r.family == "security" and r.is_engineering, f"{title} -> {r.family}"
+
+
+"""
+r3: engineering that is not software engineering.
+
+Found by reading a digest preview. The bare token `engineer` in ENGINEERING
+matches every engineering discipline there is, and the exclusion list meant
+to narrow it had three holes: it named too few disciplines, it had no
+academic vocabulary at all, and its entries carried a trailing \\b.
+"""
+
+
+def test_the_ing_form_is_excluded_as_well_as_the_er_form():
+    """The fourth sighting of this bug class. `chemical[\\s-]?engineer` with a
+    trailing \\b matched "Chemical Engineer" and could not match "Chemical
+    Engineering", so 235 adjunct teaching posts reached the digest."""
+    for t in (
+        "Mechanical Engineer",
+        "Mechanical Engineering",
+        "Chemical Engineer",
+        "Chemical Engineering",
+        "Civil Engineers",
+        "Structural Engineering",
+    ):
+        assert classify(t).family == "other", t
+
+
+def test_disciplines_the_bare_engineer_token_used_to_absorb():
+    for t in (
+        "Process Engineer I",
+        "Continuous Improvement Engineer II",
+        "Automation Controls Engineer",
+        "Lead Project Engineer",
+        "Associate Fire Protection Engineer",
+        "Senior Propulsion Engineer",
+        "Equipment Engineering",
+        "Staff Quality Engineer",
+        "Field Service Engineer",
+        "Sr. Environmental Health & Safety Engineer",
+    ):
+        assert classify(t).family == "other", t
+
+
+def test_a_software_signal_still_rescues_a_discipline():
+    """The rule that keeps this from being a blunt instrument: a
+    manufacturing engineer is out, a manufacturing systems software engineer
+    is in."""
+    for t in (
+        "Manufacturing Systems Software Engineer",
+        "Platform Quality Engineer (SDET)",
+        "Senior Firmware Validation Engineer",
+        "Process Engineer, Python Automation Platform",
+    ):
+        assert classify(t).is_engineering, t
+
+
+def test_site_reliability_survives_the_reliability_qualifier():
+    """`reliability` was left out of the discipline list on purpose: it would
+    have taken Site Reliability Engineer with it, and no software signal in
+    that title would have rescued it."""
+    assert classify("Site Reliability Engineer").family == "engineering"
+
+
+def test_teaching_a_subject_is_not_working_in_it():
+    """Academic exclusion is unconditional, unlike every other one. An
+    adjunct professor of computer science carries every software signal
+    there is."""
+    for t in (
+        "Adjunct Teaching Faculty | Aerospace Engineering",
+        "Adjunct Faculty - Computer Science",
+        "Part Time Faculty - Systems Engineering",
+        "Adjunct Instructor in Generative AI and Large Language Models",
+        "Postdoctoral Research Associate - Software Engineering",
+        "GCP and AI Instructor",
+    ):
+        assert classify(t).family == "other", t
+
+
+def test_selling_a_technology_is_not_building_it():
+    for t in (
+        "AWS Presales Specialist",
+        "Partner Development Manager - AWS",
+        "Account Executive, Cloud",
+        "Founding BDR",
+        "Business Development Manager, Kubernetes",
+    ):
+        assert classify(t).family == "other", t
+
+
+def test_forward_deployed_is_decided_before_the_sales_exclusion():
+    """Order, not wording. A sales engineer and a presales solutions
+    architect are this family; SALES would take them on the way past."""
+    for t in (
+        "Sales Engineer",
+        "Solutions Architect - Presales",
+        "Technical Account Manager",
+        "Partner Engineer",
+    ):
+        assert classify(t).family == "fde", t
+
+
+def test_sdr_is_software_defined_radio_as_often_as_it_is_a_sales_rep():
+    assert classify("DSP / SDR Receiver Engineer").is_engineering
+    assert classify("Founding BDR").family == "other"
+
+
+def test_llm_the_degree_is_not_llm_the_model():
+    """`%llm%` matching "Licensed Master Social Worker" is in the README. The
+    corpus also held a Master of Laws: "Program Coordinator, LLM Adjunct
+    Services", filed under ai. 189 of the other 190 LLM titles are genuine,
+    so the token stays and the academic rule catches this one."""
+    assert classify("Program Coordinator, LLM Adjunct Services").family == "other"
+    assert classify("AI/LLM Engineer").family == "ai"
+    assert classify("LLM Inference Engineer").family == "ai"
+
+
+def test_r3_only_ever_removes():
+    """Measured over the whole corpus: 15,720 postings changed family and
+    every one moved to `other`. A ruleset that also promoted rows would need
+    a different argument -- this one is a noise fix."""
+    assert RULESET == "r3"

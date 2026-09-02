@@ -133,6 +133,23 @@ STORE_FAMILIES = set(
 )
 
 """
+Which regions are worth keeping, by the same argument as STORE_FAMILIES.
+
+Stated as what to keep rather than what to drop, and the list is deliberately
+generous: `other` is the only region left out, and it is the only one that
+asserts anything -- a posting that names Bengaluru or Singapore. `remote`
+and `unknown` are kept because neither is evidence that the job is
+elsewhere. A posting refused at ingest cannot be reconsidered later, so the
+bar for refusing is that the posting told us it was somewhere we do not
+want, not that it failed to tell us anything.
+
+That costs precision, knowingly: 28,116 postings cannot be placed and some
+of them really are in Bengaluru without saying so. Filtering the digest is
+reversible; not storing the row is not.
+"""
+STORE_REGIONS = set(os.getenv("ARGUS_STORE_REGIONS", "us,europe,remote,unknown").split(","))
+
+"""
 Rows a single diff batch may stage. The board count alone is the wrong
 bound: a hundred Workday boards stages 181,401 postings where a hundred
 Ashby boards stages 1,700, and the first exceeds Postgres's two-minute
