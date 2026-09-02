@@ -7,10 +7,13 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * The bar condenses on scroll: it narrows, rounds, and gains a blurred
- * translucent ground so the table passes underneath it rather than behind a
- * solid block. At rest it is transparent and full width, which keeps the
- * page feeling open before anyone has scrolled.
+ * The bar gains a ground on scroll rather than changing shape.
+ *
+ * It stays the width of the content it sits over: the table runs edge to
+ * edge, and a pill floating in the middle of it read as a separate object
+ * dropped on the page rather than as the page's own header. What scroll
+ * changes is only the surface -- a rounded, blurred, translucent ground so
+ * rows pass under it legibly instead of behind a solid block.
  */
 export function Header() {
   const [scrolled, setScrolled] = useState(false);
@@ -28,7 +31,7 @@ export function Header() {
         className={cn(
           "mx-auto mt-2 px-4 transition-all duration-300 sm:px-6",
           scrolled &&
-            "max-w-3xl rounded-2xl border border-white/10 bg-black/60 shadow-lg shadow-black/40 backdrop-blur-xl lg:px-5",
+            "rounded-2xl border border-white/10 bg-black/60 shadow-lg shadow-black/40 backdrop-blur-xl",
         )}
       >
         <div className="flex items-center justify-between gap-6 py-3">
