@@ -94,13 +94,30 @@ def test_the_median_resists_one_spike(conn):
 
 
 def test_collapsed_lists_only_the_broken(conn):
+    """Rewritten with the rule it tests.
+
+    This used to give "bad" healthy refs and zero new boards and expect a
+    collapse. That is now saturation -- a working source with nothing left --
+    and treating it as a fault flagged three healthy sources in a real corpus.
+    A broken source is one that stops fetching.
+    """
     for _ in range(4):
         record(conn, "good", new_boards=500, refs=1_000)
     record(conn, "good", new_boards=480, refs=1_000)
     for _ in range(4):
         record(conn, "bad", new_boards=500, refs=1_000)
-    record(conn, "bad", new_boards=0, refs=1_000)
+    record(conn, "bad", new_boards=0, refs=50)
     assert [t.source for t in runs.collapsed(conn)] == ["bad"]
+
+
+def test_a_source_out_of_things_to_find_is_not_in_that_list(conn):
+    """The distinction the rewrite above exists for."""
+    for _ in range(4):
+        record(conn, "done", new_boards=500, refs=1_000)
+    for _ in range(3):
+        record(conn, "done", new_boards=0, refs=1_000)
+    assert [t.source for t in runs.collapsed(conn)] == []
+    assert runs.trend(conn, "done").saturated
 
 
 def test_a_discover_sweep_writes_a_row(conn, monkeypatch):
@@ -138,3 +155,82 @@ def test_a_dry_run_records_nothing(conn, monkeypatch):
     monkeypatch.setattr(discovery, "build", lambda name, **kw: discovery.SOURCES[name]())
     discovery.run(conn, ["fake"], dry_run=True)
     assert runs.latest(conn, "fake") is None
+
+
+"""
+Collapse is judged on refs, not on boards.
+
+Found by running health against a healthy corpus: it flagged commoncrawl,
+github and vcportfolio as collapsed and exited 1. All three were fine. Wiring
+that into an hourly workflow would have failed it every hour on working
+sources, which is how an alarm gets ignored.
+"""
+
+
+def _run(conn, source, refs, boards, blocked=0, finish=True):
+    from argus.discovery import SourceResult
+
+    rid = runs.start(conn, source)
+    if finish:
+        runs.finish(
+            conn,
+            rid,
+            SourceResult(source, refs_seen=refs, new_boards=boards, blocked=blocked),
+        )
+    return rid
+
+
+def test_a_source_that_stops_fetching_has_collapsed(conn):
+    """What the original bug looked like: Common Crawl swept one host of ten
+    and returned 2,709 refs where widening it yields 19,229."""
+    for _ in range(4):
+        _run(conn, "commoncrawl", refs=19_000, boards=500)
+    _run(conn, "commoncrawl", refs=2_700, boards=0)
+
+    t = runs.trend(conn, "commoncrawl")
+    assert t.collapsed and "refs" in t.reason
+    assert not t.saturated
+
+
+def test_a_source_that_fetches_and_finds_nothing_is_saturated(conn):
+    """The common case, and the opposite finding. Fetching as much as ever
+    and none of it new is what success looks like for a source that has
+    already given us everything it has."""
+    for _ in range(3):
+        _run(conn, "commoncrawl", refs=17_000, boards=800)
+    for _ in range(3):
+        _run(conn, "commoncrawl", refs=17_000, boards=0)
+
+    t = runs.trend(conn, "commoncrawl")
+    assert t.saturated, "healthy refs, nothing new"
+    assert not t.collapsed, "and emphatically not a fault"
+
+
+def test_a_broken_source_is_never_called_merely_saturated(conn):
+    """Both look like zero new boards. Only one is a problem, and calling a
+    broken source exhausted would retire it instead of fixing it."""
+    for _ in range(4):
+        _run(conn, "urlscan", refs=900, boards=10)
+    for _ in range(3):
+        _run(conn, "urlscan", refs=0, boards=0)
+
+    t = runs.trend(conn, "urlscan")
+    assert t.collapsed and not t.saturated
+
+
+def test_an_interrupted_run_is_not_the_current_state(conn):
+    """A killed run leaves a row with no finished_at and zeros in every
+    counter. Reporting it showed github at 0 refs while its trend read 1,753
+    from the last real one -- the table and the verdict disagreed."""
+    _run(conn, "github", refs=1_900, boards=20)
+    _run(conn, "github", refs=0, boards=0, finish=False)
+
+    assert runs.latest(conn, "github")["refs_seen"] == 1_900
+    assert runs.latest(conn, "github", finished_only=False)["refs_seen"] == 0
+
+
+def test_blocked_and_empty_needs_no_history(conn):
+    """Being prevented from looking is a collapse on its own evidence."""
+    _run(conn, "commoncrawl", refs=0, boards=0, blocked=9)
+    t = runs.trend(conn, "commoncrawl")
+    assert t.collapsed and "blocked" in t.reason

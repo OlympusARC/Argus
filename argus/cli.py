@@ -391,6 +391,8 @@ def cmd_health(args) -> int:
         note = ""
         if t.collapsed:
             note = f"  <- {t.reason}"
+        elif t.saturated:
+            note = f"  ({t.reason})"
         elif last.get("skipped"):
             note = f"  ({last['skipped']})"
         elif last.get("error"):
@@ -400,6 +402,20 @@ def cmd_health(args) -> int:
             f"{_fmt(last.get('refs_seen') or 0):>9}{_fmt(last.get('new_boards') or 0):>8}"
             f"{last.get('blocked') or 0:>9}  {t.arrow}{note}"
         )
+
+    """
+    Saturation is reported and does not fail. A source fetching as much as it
+    ever did and finding nothing new is working correctly and out of things to
+    find -- the signal for running it weekly, not for waking anyone up.
+    """
+    full = [t for t in trends if t.saturated]
+    if full:
+        print(
+            f"\n{len(full)} source{'s' if len(full) != 1 else ''} saturated "
+            f"-- working, nothing left to find:"
+        )
+        for t in full:
+            print(f"  {t.source:<18}{t.reason}")
 
     bad = [t for t in trends if t.collapsed]
     if bad:

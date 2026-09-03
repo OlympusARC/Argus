@@ -311,6 +311,12 @@ the linked project.
   through — had none. 2,036 postings arrived carrying no ingest rules at all:
   postings from 2023 under a 2026 cutoff, families the product does not serve,
   and a null region on every one. Both paths now call `jobs.keep`.
+- **Refs measure whether a source works; new boards measure whether the world
+  changed.** Watching the wrong one calls a healthy exhausted source broken:
+  Common Crawl returns 17,094 refs and 0 new boards, which is what success
+  looks like once it has given us everything it has. Collapse detection watched
+  boards and flagged three working sources, exiting non-zero — an alarm that
+  fires hourly on healthy input is an alarm nobody reads.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.

@@ -27,10 +27,32 @@ from dataclasses import dataclass
 
 """
 A run has to fall this far below its own history to count as collapsed. Set
-by the case it exists to catch: Common Crawl went from 13,635 new boards to
-0, and Ashby-only Wayback sits at a tenth of what widening it would yield.
+by the case it exists to catch: Common Crawl swept one host of ten and
+returned 2,709 refs where widening it yields 19,229 -- a seventh.
 """
 COLLAPSE_RATIO = 0.2
+
+"""
+Collapse is judged on refs_seen, not on new boards. They answer different
+questions: refs is whether the source is working, new boards is whether the
+world has changed since we last looked.
+
+Watching boards conflates the two, and gets the common case backwards. Common
+Crawl now returns 17,094 refs and 0 new boards -- healthy and exhausted, which
+is what success looks like for a source that has already given us everything
+it has. Watching boards flagged that as a collapse, along with github and
+vcportfolio, and would have failed an hourly workflow on three working
+sources.
+
+A genuinely broken source stops producing refs. That is what the original bug
+looked like and what this now watches.
+"""
+
+"""
+Runs to look back over when deciding a source has nothing left. Long enough
+that one quiet night is not saturation, short enough to notice within a week.
+"""
+SATURATION_RUNS = 3
 
 """
 Fewer runs than this and there is no history to judge against, so nothing is
@@ -49,6 +71,19 @@ class Trend:
     collapsed: bool = False
     reason: str = ""
 
+    """
+    Refs, which is what collapse is judged on. Boards stay above because they
+    are what the operator wants to read.
+    """
+    refs_latest: int = 0
+    refs_median: float = 0.0
+
+    """
+    Working, and out of things to find. Not a fault -- the signal a scheduler
+    wants, to run this weekly instead of nightly.
+    """
+    saturated: bool = False
+
     @property
     def ratio(self) -> float:
         return self.latest / self.median if self.median else 1.0
@@ -57,6 +92,8 @@ class Trend:
     def arrow(self) -> str:
         if self.collapsed:
             return "!"
+        if self.saturated:
+            return "="
         if self.runs < MIN_HISTORY:
             return "-"
         if self.ratio >= 1.5:
@@ -124,9 +161,19 @@ def trend(conn, source: str, window: int = 10) -> Trend:
     latest = int(rows[0]["new_boards"] or 0)
     blocked = int(rows[0]["blocked"] or 0)
     refs = int(rows[0]["refs_seen"] or 0)
-    history = [int(r["new_boards"] or 0) for r in rows[1:]]
-    med = statistics.median(history) if history else 0.0
-    t = Trend(source, latest=latest, median=med, runs=len(rows), blocked=blocked)
+    boards_history = [int(r["new_boards"] or 0) for r in rows[1:]]
+    refs_history = [int(r["refs_seen"] or 0) for r in rows[1:]]
+    med = statistics.median(boards_history) if boards_history else 0.0
+    refs_med = statistics.median(refs_history) if refs_history else 0.0
+    t = Trend(
+        source,
+        latest=latest,
+        median=med,
+        runs=len(rows),
+        blocked=blocked,
+        refs_latest=refs,
+        refs_median=refs_med,
+    )
 
     """
     Blocked-with-nothing-to-show is a collapse on its own evidence: the source
@@ -135,16 +182,44 @@ def trend(conn, source: str, window: int = 10) -> Trend:
     """
     if blocked and refs == 0:
         t.collapsed, t.reason = True, f"blocked {blocked}x, returned nothing"
-    elif len(rows) >= MIN_HISTORY and med > 0 and latest < COLLAPSE_RATIO * med:
+    elif len(rows) >= MIN_HISTORY and refs_med > 0 and refs < COLLAPSE_RATIO * refs_med:
         t.collapsed = True
-        t.reason = f"{latest} new vs median {med:.0f}"
+        t.reason = f"{refs:,} refs vs median {refs_med:,.0f}"
+
+    """
+    Saturated is the opposite finding and needs saying separately: the source
+    is fetching as much as it ever did and none of it is new. Nothing is
+    wrong, and running it nightly is spending time to be told so again.
+
+    Requires refs to be healthy, or a broken source with no history would
+    look merely exhausted.
+    """
+    recent = [int(r["new_boards"] or 0) for r in rows[:SATURATION_RUNS]]
+    if (
+        not t.collapsed
+        and len(rows) >= SATURATION_RUNS
+        and refs > 0
+        and refs_med > 0
+        and refs >= COLLAPSE_RATIO * refs_med
+        and sum(recent) == 0
+    ):
+        t.saturated = True
+        t.reason = f"{refs:,} refs, 0 new boards in {SATURATION_RUNS} runs"
     return t
 
 
-def latest(conn, source: str) -> dict | None:
+def latest(conn, source: str, *, finished_only: bool = True) -> dict | None:
+    """The newest run, by default the newest one that actually finished.
+
+    A killed run leaves a row with no finished_at and zeros in every counter.
+    Reporting that as the current state showed github at 0 refs while its
+    trend -- which has always excluded unfinished runs -- read 1,753 from the
+    last real one. The table and the verdict disagreed, and the table was
+    wrong.
+    """
+    where = "source=?" + (" AND finished_at IS NOT NULL" if finished_only else "")
     row = conn.execute(
-        """SELECT * FROM source_runs WHERE source=?
-           ORDER BY id DESC LIMIT 1""",
+        f"SELECT * FROM source_runs WHERE {where} ORDER BY id DESC LIMIT 1",
         (source,),
     ).fetchone()
     return dict(row) if row else None
