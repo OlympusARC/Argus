@@ -291,6 +291,9 @@ the linked project.
   BambooHR publishes none — not in the list endpoint, not in the detail page —
   so `ARGUS_AGE_EXEMPT_ATS` exempts it rather than silently discarding 3,133
   postings, 2,223 of them engineering roles reachable through no other ATS.
+  Those get their discovery date instead, written once at insert. Written on
+  every poll it would re-date the posting each time it was edited, and sort it
+  to the top of the dashboard for changing a title.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.

@@ -647,3 +647,76 @@ def test_a_source_correcting_a_date_still_wins(conn, monkeypatch):
         conn, {("ashby", "acme"): [post("1", title="Staff", posted_at=1_787_000_000)]}
     )
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_787_000_000
+
+
+def test_a_source_with_no_dates_gets_its_discovery_date(conn, monkeypatch):
+    """BambooHR publishes no date anywhere, so the alternative is a
+    permanently empty column on 3% of the feed. A Posted column blank for one
+    source and populated for every other reads as a bug rather than an
+    absence."""
+    from argus.feed import diff
+
+    conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
+                    VALUES ('bamboohr','acme','active',1,0)""")
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
+    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
+
+    diff.run_batch(
+        conn,
+        {
+            ("bamboohr", "acme"): [
+                Posting(
+                    ats="bamboohr",
+                    slug="acme",
+                    external_id="1",
+                    title="Software Engineer",
+                    url="https://acme.bamboohr.com/careers/1",
+                )
+            ]
+        },
+    )
+    got = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
+    assert got is not None, "dated with the moment we found it"
+    assert abs(got - jobs.now()) < 60
+
+
+def test_the_discovery_date_is_written_once_not_refreshed(conn, monkeypatch):
+    """The update paths COALESCE, so a later poll must not bump this to the
+    current time. A source that re-dated itself on every edit would sort to
+    the top of the dashboard whenever a title changed."""
+    from argus.feed import diff
+
+    conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
+                    VALUES ('bamboohr','acme','active',1,0)""")
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
+    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
+
+    def p(title):
+        return Posting(
+            ats="bamboohr",
+            slug="acme",
+            external_id="1",
+            title=title,
+            url="https://acme.bamboohr.com/careers/1",
+        )
+
+    diff.run_batch(conn, {("bamboohr", "acme"): [p("Engineer")]})
+    first = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
+
+    conn.execute("UPDATE jobs SET posted_at = ?", (first - 86_400 * 30,))
+    conn.commit()
+    diff.run_batch(conn, {("bamboohr", "acme"): [p("Senior Engineer")]})
+    after = conn.execute("SELECT posted_at, title FROM jobs").fetchone()
+    assert after["title"] == "Senior Engineer", "the edit applied"
+    assert after["posted_at"] == first - 86_400 * 30, "the date did not move"
+
+
+def test_other_sources_are_not_given_a_discovery_date(conn, monkeypatch):
+    """An undated posting from a source that does publish dates is a fact
+    about that posting, not a gap to paper over."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
+    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
+    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] is None

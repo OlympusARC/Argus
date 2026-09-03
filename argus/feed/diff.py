@@ -58,6 +58,10 @@ CREATE TEMP TABLE IF NOT EXISTS staged_postings (
     seniority       TEXT,
     classified_by   TEXT,
     region          TEXT,
+    -- Read by INSERT_NEW and by nothing else. The discovery date belongs to
+    -- the moment a posting first appears, so putting it in posted_at would
+    -- let the update paths take it and re-date the posting on every edit.
+    discovered_at   BIGINT,
     PRIMARY KEY (ats, slug, external_id)
 )
 """
@@ -86,7 +90,7 @@ INSERT INTO jobs (ats, slug, external_id, title, location, locations_json, url,
                   posted_at, first_seen_at, last_seen_at, content_hash, source,
                   role_family, is_engineering, is_fde, seniority, classified_by, region)
 SELECT s.ats, s.slug, s.external_id, s.title, s.location, s.locations_json, s.url,
-       s.posted_at, ?, ?, s.content_hash, 'poll',
+       COALESCE(s.posted_at, s.discovered_at), ?, ?, s.content_hash, 'poll',
        s.role_family, s.is_engineering, s.is_fde, s.seniority, s.classified_by,
        s.region
 FROM staged_postings s
@@ -252,6 +256,7 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
     cutoff that moved mid-batch would accept and reject identical postings.
     """
     cutoff = config.posted_after()
+    cutoff_ts = jobs_mod.now()
     for (ats, slug), postings in fetched.items():
         for p in postings:
             role = classify(p.title, p.department)
@@ -325,6 +330,7 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
                     role.seniority,
                     role.ruleset,
                     geo.region(p.location),
+                    _discovery_date(ats, p, cutoff_ts),
                 )
             )
     if skipped:
@@ -334,11 +340,37 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             """INSERT INTO staged_postings
                    (ats, slug, external_id, title, location, locations_json, url,
                     posted_at, content_hash, role_family, is_engineering, is_fde,
-                    seniority, classified_by, region)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    seniority, classified_by, region, discovered_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT (ats, slug, external_id) DO NOTHING""",
             rows,
         )
+
+
+def _discovery_date(ats: str, posting, ts: int) -> int | None:
+    """When we found it, for sources that publish no date of their own.
+
+    Only for AGE_EXEMPT_ATS -- BambooHR alone. It exposes no date anywhere, so
+    the alternative to this is a permanently empty column on 3% of the feed,
+    and a Posted column that is blank for one source and populated for every
+    other reads as a bug rather than as an absence.
+
+    An approximation, and worth being plain about which kind. Polling is
+    hourly, so for anything arriving from now on the discovery date is within
+    an hour of the real one. For the postings already on a board the first
+    time we look, it is simply the day we looked -- correct for none of them,
+    and increasingly harmless as those age out.
+
+    Written once, at insert. The update paths COALESCE, so a later poll cannot
+    bump this to the current time and make an edited posting look new. That
+    matters more than it sounds: a source that re-dated itself on every edit
+    would sort to the top of the dashboard every time a title changed.
+    """
+    if posting.posted_at is not None:
+        return None
+    from ..core import config
+
+    return ts if ats in config.AGE_EXEMPT_ATS else None
 
 
 def _rows(cur) -> list[dict]:
