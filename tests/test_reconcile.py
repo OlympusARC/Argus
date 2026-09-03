@@ -649,11 +649,14 @@ def test_a_source_correcting_a_date_still_wins(conn, monkeypatch):
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_787_000_000
 
 
-def test_a_source_with_no_dates_gets_its_discovery_date(conn, monkeypatch):
+def test_a_source_with_no_dates_gets_the_window_start(conn, monkeypatch):
     """BambooHR publishes no date anywhere, so the alternative is a
-    permanently empty column on 3% of the feed. A Posted column blank for one
-    source and populated for every other reads as a bug rather than an
-    absence."""
+    permanently empty column on 3% of the feed.
+
+    The window's start rather than the moment we looked, so every one of its
+    postings carries the same value -- visibly a floor rather than a
+    measurement. Nobody mistakes five thousand postings sharing one date for
+    five thousand published that day."""
     from argus.feed import diff
 
     conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
@@ -676,14 +679,13 @@ def test_a_source_with_no_dates_gets_its_discovery_date(conn, monkeypatch):
         },
     )
     got = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
-    assert got is not None, "dated with the moment we found it"
-    assert abs(got - jobs.now()) < 60
+    assert got == config.posted_after(), "the window start, not the poll time"
 
 
-def test_the_discovery_date_is_written_once_not_refreshed(conn, monkeypatch):
-    """The update paths COALESCE, so a later poll must not bump this to the
-    current time. A source that re-dated itself on every edit would sort to
-    the top of the dashboard whenever a title changed."""
+def test_the_stand_in_date_is_written_once_not_refreshed(conn, monkeypatch):
+    """The update paths COALESCE, so a later poll must not move it. A source
+    that re-dated itself on every edit would sort to the top of the dashboard
+    whenever a title changed."""
     from argus.feed import diff
 
     conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
@@ -711,7 +713,7 @@ def test_the_discovery_date_is_written_once_not_refreshed(conn, monkeypatch):
     assert after["posted_at"] == first - 86_400 * 30, "the date did not move"
 
 
-def test_other_sources_are_not_given_a_discovery_date(conn, monkeypatch):
+def test_other_sources_are_not_given_a_stand_in_date(conn, monkeypatch):
     """An undated posting from a source that does publish dates is a fact
     about that posting, not a gap to paper over."""
     from argus.feed import diff

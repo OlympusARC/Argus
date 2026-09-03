@@ -330,7 +330,7 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
                     role.seniority,
                     role.ruleset,
                     geo.region(p.location),
-                    _discovery_date(ats, p, cutoff_ts),
+                    _fallback_posted_at(ats, p, cutoff_ts),
                 )
             )
     if skipped:
@@ -347,30 +347,33 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
         )
 
 
-def _discovery_date(ats: str, posting, ts: int) -> int | None:
-    """When we found it, for sources that publish no date of their own.
+def _fallback_posted_at(ats: str, posting, ts: int) -> int | None:
+    """A stand-in posted date, for sources that publish none of their own.
 
-    Only for AGE_EXEMPT_ATS -- BambooHR alone. It exposes no date anywhere, so
-    the alternative to this is a permanently empty column on 3% of the feed,
-    and a Posted column that is blank for one source and populated for every
-    other reads as a bug rather than as an absence.
+    Only for AGE_EXEMPT_ATS -- BambooHR alone. It exposes no date anywhere,
+    so the alternative is a permanently empty column on 3% of the feed, and a
+    Posted column blank for one source and populated for every other reads as
+    a bug rather than as an absence.
 
-    An approximation, and worth being plain about which kind. Polling is
-    hourly, so for anything arriving from now on the discovery date is within
-    an hour of the real one. For the postings already on a board the first
-    time we look, it is simply the day we looked -- correct for none of them,
-    and increasingly harmless as those age out.
+    The window's own start date, deliberately, rather than the moment we
+    looked. Every BambooHR posting then carries the same value, which is
+    visibly a floor rather than a measurement: no reader will mistake five
+    thousand postings sharing one date for five thousand postings published
+    that day. Using the discovery time instead would have spread them across
+    whenever the poll happened to run, which looks like data and is not.
 
-    Written once, at insert. The update paths COALESCE, so a later poll cannot
-    bump this to the current time and make an edited posting look new. That
-    matters more than it sounds: a source that re-dated itself on every edit
-    would sort to the top of the dashboard every time a title changed.
+    It also makes the refills comparable. A discovery date changes on every
+    rebuild, so two runs of the same corpus would disagree about when the
+    same posting appeared.
+
+    Written once, at insert -- see discovered_at in the staged table. The
+    update paths COALESCE, so a later poll cannot move it.
     """
     if posting.posted_at is not None:
         return None
     from ..core import config
 
-    return ts if ats in config.AGE_EXEMPT_ATS else None
+    return config.posted_after() if ats in config.AGE_EXEMPT_ATS else None
 
 
 def _rows(cur) -> list[dict]:
