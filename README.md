@@ -295,6 +295,12 @@ the linked project.
   which reads as the floor it is rather than as a measurement. Written once at
   insert: written on every poll it would re-date the posting each time it was
   edited, and sort it to the top of the dashboard for changing a title.
+- **GitHub follows a rename forever, so a stale repo entry keeps working.** It
+  costs a request and hides a duplicate: two entries in the README-only list
+  resolved to repos already read as structured JSON, so the same data arrived
+  twice and the README source looked more productive than it was. Re-resolve
+  the list against the API when repos are added — ask for each name and compare
+  `full_name` to what you asked for.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.

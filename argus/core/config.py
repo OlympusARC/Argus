@@ -332,14 +332,23 @@ JOBJSON_ARCHIVES = [
 Repos with no structured file -- their README is a rendered table of postings
 whose apply links carry the raw ATS URL, which the router can read directly.
 """
+"""
+GitHub follows a rename forever, so a stale entry here keeps working and
+quietly costs a request. Two of these resolved to repos already read as JSON
+by the simplify source -- coderQuad/New-Grad-Positions to
+SimplifyJobs/New-Grad-Positions, and Ouckah/Summer2025-Internships to
+vanshb03/Summer2027-Internships -- so the same data arrived twice, once
+structured and once as a rendered table, and jobrepos looked more productive
+than it was.
+
+Worth re-resolving this list against the API when repos are added: ask for
+each name and compare full_name to what you asked for.
+"""
 COMMUNITY_REPOS = [
     ("speedyapply/2027-SWE-College-Jobs", "main", "README.md"),
     ("speedyapply/2027-AI-College-Jobs", "main", "README.md"),
     ("Education-Victory/2025-New-Grad-Positions", "main", "README.md"),
-    ("coderQuad/New-Grad-Positions", "main", "README.md"),
-    ("arunike/Summer-2026-Internship", "main", "README.md"),
     ("ReaVNaiL/New-Grad-2024", "main", "README.md"),
-    ("Ouckah/Summer2025-Internships", "main", "README.md"),
     # The zapplyjobs family: one repo per job family, all refreshed daily, all
     # linking straight to the employer's ATS.
     ("zapplyjobs/Internships-2027", "main", "README.md"),
@@ -364,7 +373,7 @@ COMMUNITY_REPOS = [
     ("didtheyghostme/Singapore-Summer2026-TechInternships", "main", "README.md"),
     ("kazisean/nyc-internship-2026", "main", "README.md"),
     ("soongenwong/Europe-Tech-Internships-2026", "main", "README.md"),
-    ("armankuzembayev/tech_internships_london_2026", "main", "README.md"),
+    ("armankuzembayev/tech_internships_london", "main", "README.md"),
     ("northwesternfintech/2027QuantInternships", "main", "README.md"),
     ("LogicodeHQ/hardware-jobs-internships-2026", "main", "README.md"),
     ("dpnsu/2026-SWE-College-Jobs", "master", "README.md"),
