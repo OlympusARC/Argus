@@ -280,7 +280,9 @@ the linked project.
   rate-limited client with `Retry-After: 39481` — eleven hours — and urllib3
   obeys it literally, while holding the per-host slot. One request took a
   twelve-thread poll to zero boards in two hours. A delay named in hours is a
-  refusal; `http.RETRY_AFTER_MAX` caps what we will wait for.
+  refusal; `http.RETRY_AFTER_MAX` caps what we will wait for. Workable was
+  removed for answering that to everything: recognising a source we can never
+  poll just files boards forever, and 6,285 had accumulated against 664 jobs.
 - **A connection held across slow work is a connection you will lose.** A poll
   keeps one session for twenty minutes and spends nearly all of it on HTTP, so
   the pooler reclaims it and the next write finds a closed socket. The wrapper

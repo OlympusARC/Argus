@@ -26,7 +26,6 @@ HOSTS = (
     "job-boards.greenhouse.io",
     "boards.greenhouse.io",
     "jobs.lever.co",
-    "apply.workable.com",
     "jobs.smartrecruiters.com",
 )
 

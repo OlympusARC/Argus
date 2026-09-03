@@ -47,7 +47,6 @@ DEFAULT_HOSTS = (
     "boards.greenhouse.io",
     "job-boards.greenhouse.io",
     "jobs.lever.co",
-    "apply.workable.com",
     "jobs.smartrecruiters.com",
     "myworkdayjobs.com",
     "breezy.hr",

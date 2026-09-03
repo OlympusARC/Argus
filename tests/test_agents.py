@@ -274,7 +274,14 @@ def test_the_probe_is_deterministic_and_needs_no_model(conn):
     """Evidence the model reasons over, not evidence it produces."""
     out = healer.probe("commoncrawl")
     assert out["buildable"] and "hosts" in out
-    assert len(out["hosts"]) >= 10, "the real host list, post-fix"
+    """
+    The number this guards is "more than one". Common Crawl swept a single
+    host for months while every run looked normal, and the fix widened it to
+    ten. It is nine now because workable was removed -- Cloudflare rate-limits
+    it to a standstill -- so the bound is deliberately loose: it should fail
+    if the sweep narrows again, not every time the host list is edited.
+    """
+    assert len(out["hosts"]) >= 8, "the real host list, post-fix"
 
 
 """

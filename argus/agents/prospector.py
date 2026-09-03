@@ -45,7 +45,7 @@ PROMPT = """You are finding web pages that link to many company job boards.
 
 We crawl ATS job boards directly: Ashby (jobs.ashbyhq.com/<company>),
 Greenhouse (boards.greenhouse.io/<company>, job-boards.greenhouse.io),
-Lever (jobs.lever.co/<company>), Workable (apply.workable.com/<company>),
+Lever (jobs.lever.co/<company>),
 SmartRecruiters, Workday (<tenant>.myworkdayjobs.com), BambooHR, Breezy and
 Recruitee.
 

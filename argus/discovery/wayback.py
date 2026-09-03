@@ -33,7 +33,6 @@ DEFAULT_HOSTS = (
     ("boards.greenhouse.io", "prefix"),
     ("job-boards.greenhouse.io", "prefix"),
     ("jobs.lever.co", "prefix"),
-    ("apply.workable.com", "prefix"),
     ("jobs.smartrecruiters.com", "prefix"),
     ("myworkdayjobs.com", "domain"),
     ("breezy.hr", "domain"),

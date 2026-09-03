@@ -54,7 +54,6 @@ NOT_A_COMPANY = {
     "ashbyhq.com",
     "myworkdayjobs.com",
     "smartrecruiters.com",
-    "workable.com",
     "recruitee.com",
     "breezy.hr",
     "icims.com",

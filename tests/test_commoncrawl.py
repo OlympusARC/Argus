@@ -32,7 +32,6 @@ def test_every_pollable_ats_is_swept():
             "greenhouse": "greenhouse",
             "lever": "lever",
             "workday": "myworkdayjobs",
-            "workable": "workable",
             "smartrecruiters": "smartrecruiters",
             "breezy": "breezy",
             "recruitee": "recruitee",
@@ -116,7 +115,6 @@ def test_wayback_sweeps_every_pollable_ats_too():
             "greenhouse": "greenhouse",
             "lever": "lever",
             "workday": "myworkdayjobs",
-            "workable": "workable",
             "smartrecruiters": "smartrecruiters",
             "breezy": "breezy",
             "recruitee": "recruitee",
@@ -134,5 +132,5 @@ def test_wayback_uses_the_right_match_kind_per_host():
     kinds = dict(WB)
     for h in ("myworkdayjobs.com", "breezy.hr", "recruitee.com", "bamboohr.com"):
         assert kinds[h] == "domain", h
-    for h in ("jobs.ashbyhq.com", "jobs.lever.co", "apply.workable.com"):
+    for h in ("jobs.ashbyhq.com", "jobs.lever.co", "jobs.smartrecruiters.com"):
         assert kinds[h] == "prefix", h

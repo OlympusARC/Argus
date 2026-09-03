@@ -38,25 +38,6 @@ PAYLOADS = {
             }
         ],
     },
-    "workable": {
-        "name": "1 Resource Group",
-        "jobs": [
-            {
-                "title": "ACDC Mechanic",
-                "shortcode": "E05AFFF632",
-                "employment_type": "Full-time",
-                "telecommuting": False,
-                "department": "Contract to Hire",
-                "url": "https://apply.workable.com/j/E05AFFF632",
-                "application_url": "https://apply.workable.com/j/E05AFFF632/apply",
-                "published_on": "2026-08-25",
-                "country": "United States",
-                "city": "Vidor",
-                "state": "Texas",
-                "locations": [{"country": "United States", "city": "Vidor", "region": "Texas"}],
-            }
-        ],
-    },
     "breezy": [
         {
             "id": "4136f1c6a49f",
@@ -101,7 +82,6 @@ PAYLOADS = {
 
 EXPECTED = {
     "smartrecruiters": ("743999659865126", "Application System Engineer"),
-    "workable": ("E05AFFF632", "ACDC Mechanic"),
     "breezy": ("4136f1c6a49f", "Chief Executive Officer (CEO)"),
     "recruitee": ("1527683", "Project Manager"),
     "bamboohr": ("24", "Entry -Mid Android Developer"),
@@ -118,26 +98,10 @@ def canned(monkeypatch):
     return serve
 
 
-"""
-Resolve by class, not through the registry.
-
-An adapter can be correct and still not be registered -- workable's is, and
-it is unregistered because Cloudflare will not serve us, not because it
-stopped mapping payloads. These tests are about the mapping, so they should
-not care whether the pipeline currently polls it.
-"""
-
-
-def adapter_for(ats: str):
-    from argus.adapters.workable import WorkableAdapter
-
-    return adapters.get(ats) or {"workable": WorkableAdapter()}[ats]
-
-
 @pytest.mark.parametrize("ats", sorted(PAYLOADS))
 def test_adapter_maps_the_vendor_payload(ats, canned):
     canned(PAYLOADS[ats])
-    postings = adapter_for(ats).fetch("acme")
+    postings = adapters.get(ats).fetch("acme")
     assert len(postings) == 1
     p = postings[0]
     external_id, title = EXPECTED[ats]
@@ -163,16 +127,16 @@ def test_a_posting_with_no_id_is_skipped_not_invented(ats, canned):
     for field in ("id", "shortcode"):
         rows[0].pop(field, None)
     canned(stripped)
-    assert adapter_for(ats).fetch("acme") == []
+    assert adapters.get(ats).fetch("acme") == []
 
 
 @pytest.mark.parametrize("ats", sorted(PAYLOADS))
 def test_the_same_payload_hashes_the_same_twice(ats, canned):
     """content_hash drives edit detection; instability would flag every poll."""
     canned(PAYLOADS[ats])
-    first = adapter_for(ats).fetch("acme")[0].content_hash()
+    first = adapters.get(ats).fetch("acme")[0].content_hash()
     canned(PAYLOADS[ats])
-    assert adapter_for(ats).fetch("acme")[0].content_hash() == first
+    assert adapters.get(ats).fetch("acme")[0].content_hash() == first
 
 
 def test_paginated_adapters_refuse_to_return_a_partial_board(canned):
@@ -224,18 +188,3 @@ def test_no_header_stays_none():
         headers: dict = {}
 
     assert http.CappedRetry(total=3).get_retry_after(FakeResponse()) is None
-
-
-def test_workable_is_not_polled_but_is_still_recognised():
-    """The adapter works; Cloudflare does not let us use it. Its boards and
-    postings stay in the database, and the URL router still parses its URLs
-    so discovery keeps recording them."""
-    from argus import adapters
-    from argus.core import urls
-
-    assert "workable" not in adapters.supported()
-    assert "workable" in adapters.PLANNED
-    assert adapters.get("workable") is None
-
-    ref = urls.parse("https://apply.workable.com/acme/j/ABC123/")
-    assert ref is not None and ref.ats == "workable"

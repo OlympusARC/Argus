@@ -56,7 +56,6 @@ CASES = [
         "nvidia.wd5/nvidiaexternalcareersite",
         None,
     ),
-    ("https://apply.workable.com/acmeco/j/ABC123/", "workable", "acmeco", "ABC123"),
     ("https://someco.recruitee.com/o/engineer", "recruitee", "someco", None),
 ]
 
@@ -117,7 +116,6 @@ def test_a_file_is_never_a_company():
         "https://jobs.lever.co/robots.txt",
         "https://boards.greenhouse.io/sitemap.xml",
         "https://jobs.ashbyhq.com/favicon.ico",
-        "https://apply.workable.com/app.js",
         "https://jobs.smartrecruiters.com/index.html",
     ):
         assert parse(u) is None, f"{u} is a file, not a board"
@@ -125,7 +123,6 @@ def test_a_file_is_never_a_company():
 
 def test_boilerplate_pages_are_not_companies():
     for u in (
-        "https://apply.workable.com/privacy",
         "https://jobs.lever.co/terms",
         "https://boards.greenhouse.io/login",
     ):

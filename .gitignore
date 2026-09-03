@@ -30,3 +30,4 @@ htmlcov/
 prune_corpus.py
 prune_stale.py
 backfill_region.py
+purge_workable.py

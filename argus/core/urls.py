@@ -191,16 +191,6 @@ def parse(url: str) -> Ref | None:
         )
 
     """
-    --- Workable --------------------------------------------------------
-    """
-    if host == "apply.workable.com" and parts:
-        slug = _clean_slug(parts[0])
-        if not slug or slug in GENERIC_RESERVED:
-            return None
-        ext = parts[2] if len(parts) > 2 and parts[1] == "j" else None
-        return Ref("workable", slug, ext)
-
-    """
     --- Single-tenant subdomain ATSs ------------------------------------
     """
     for suffix, ats in (
@@ -225,7 +215,7 @@ def parse(url: str) -> Ref | None:
 
 _URL_IN_TEXT = re.compile(
     r"""https?://(?:jobs\.ashbyhq\.com|(?:job-)?boards(?:\.eu)?\.greenhouse\.io"""
-    r"""|jobs(?:\.eu)?\.lever\.co|apply\.workable\.com|jobs\.smartrecruiters\.com"""
+    r"""|jobs(?:\.eu)?\.lever\.co|jobs\.smartrecruiters\.com"""
     r"""|[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com|[a-z0-9-]+\.(?:recruitee\.com|breezy\.hr|icims\.com))"""
     r"""/[^\s"'<>)\]}\\]*""",
     re.I,

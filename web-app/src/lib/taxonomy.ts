@@ -26,7 +26,6 @@ export const ATSES = [
   "smartrecruiters",
   "ashby",
   "lever",
-  "workable",
   "bamboohr",
   "breezy",
   "recruitee",
