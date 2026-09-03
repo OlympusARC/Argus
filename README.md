@@ -301,6 +301,12 @@ the linked project.
   twice and the README source looked more productive than it was. Re-resolve
   the list against the API when repos are added — ask for each name and compare
   `full_name` to what you asked for.
+- **A loop that touches the network is the cost, not the work it does.** This
+  has now been the answer five times: `reclassify` at one UPDATE a row (4.5h →
+  48s), `add_boards` and `add_many` at three round trips a ref (528s → 4.9s),
+  the batch diff bounded by boards rather than postings, and `seed` at one
+  INSERT a posting (263s → 63s). Anything iterating over rows and calling
+  `execute` is doing latency, not computation.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.
