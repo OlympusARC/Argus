@@ -54,6 +54,33 @@ Ago" instead of "5" does not rewrite it.
 """
 _RELATIVE = re.compile(r"posted\s+(today|yesterday|(\d+)\s+days?\s+ago)\s*$", re.I)
 
+"""
+"Posted 30+ Days Ago" is not a date, but it is a bound: the posting is at
+least thirty days old, so the newest it could possibly be is now - 30d.
+"""
+_AT_LEAST = re.compile(r"posted\s+(\d+)\+\s+days?\s+ago\s*$", re.I)
+
+
+def newest_possible(text: str | None, now: float | None = None) -> int | None:
+    """The latest date a posting could have, from Workday's relative phrasing.
+
+    Exact for "Posted 5 Days Ago" -- the newest it could be is the date it
+    is. For "Posted 30+ Days Ago" it is a genuine bound: at least thirty
+    days old, so at most now - 30d, and possibly 2019.
+
+    A bound is not a date and must never be stored as one. It answers
+    exactly one question: if even the newest date this posting could have is
+    older than the cutoff, it is too old, whatever the true date is.
+    """
+    exact = posted_from_relative(text, now)
+    if exact is not None:
+        return exact
+    m = _AT_LEAST.search((text or "").strip())
+    if not m:
+        return None
+    base = now if now is not None else time.time()
+    return int(base - int(m.group(1)) * 86400)
+
 
 def posted_from_relative(text: str | None, now: float | None = None) -> int | None:
     """An epoch from Workday's relative phrasing, or None when it is unbounded."""
@@ -165,6 +192,7 @@ class WorkdayAdapter(Adapter):
                     location=location,
                     locations=[location] if location else [],
                     posted_at=posted_from_relative(j.get("postedOn")),
+                    posted_bound=newest_possible(j.get("postedOn")),
                     raw={
                         "externalPath": path,
                         "postedOn": j.get("postedOn"),

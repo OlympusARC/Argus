@@ -200,6 +200,9 @@ building anything.
 | `SUPABASE_REGION` | defaults to `us-west-2` |
 | `ARGUS_DISCORD_WEBHOOK` | the hourly digest. Absent, `notify` prints and exits 0 |
 | `ARGUS_STORE_FAMILIES` | which role families are stored at all (see below) |
+| `ARGUS_STORE_REGIONS` | which regions are stored; `other` is the only rejection |
+| `ARGUS_STORE_POSTED_WITHIN_DAYS` | how recent a posting must be. 29, deliberately |
+| `ARGUS_AGE_EXEMPT_ATS` | sources that publish no date, so cannot be aged |
 | `GROQ_API_KEY` / `NVIDIA_API_KEY` / `GEMINI_API_KEY` | the agents. Absent, they skip |
 | `GITHUB_TOKEN`, `BRAVE_API_KEY`, `ARGUS_SEC_CONTACT` | individual discovery sources |
 
@@ -273,6 +276,17 @@ the linked project.
 - **Substring matching on job titles is a trap.** `%llm%` matches *Fulfillment
   Associate* and *Licensed Master Social Worker*. Every pattern uses word
   boundaries for that reason.
+- **A bound is not a date, and is still worth having.** Workday will not date
+  71% of what it declines to date — it says "Posted 30+ Days Ago", which covers
+  last month and 2019 equally. Storing `now − 30d` would invent precision, but
+  the bound still answers the only question the age filter asks: if even the
+  newest date it could have is too old, it is too old. Which is why the window
+  is 29 days and not 30 — at 30 the bound sits exactly on the cutoff and
+  decides nothing.
+- **An age filter on a source with no dates is a delete, not a filter.**
+  BambooHR publishes none — not in the list endpoint, not in the detail page —
+  so `ARGUS_AGE_EXEMPT_ATS` exempts it rather than silently discarding 3,133
+  postings, 2,223 of them engineering roles reachable through no other ATS.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.

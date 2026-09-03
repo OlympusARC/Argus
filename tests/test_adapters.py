@@ -188,3 +188,21 @@ def test_no_header_stays_none():
         headers: dict = {}
 
     assert http.CappedRetry(total=3).get_retry_after(FakeResponse()) is None
+
+
+def test_workday_bounds_what_it_cannot_date():
+    """ "Posted 30+ Days Ago" is unbounded above -- it covers last month and
+    2019 equally -- so it is never a date. It is bounded below, which makes
+    it a usable ceiling: at most thirty days old."""
+    from argus.adapters.workday import newest_possible, posted_from_relative
+
+    now = 1_788_400_000
+    assert posted_from_relative("Posted 30+ Days Ago", now) is None
+    assert newest_possible("Posted 30+ Days Ago", now) == now - 30 * 86_400
+    assert newest_possible("Posted 90+ Days Ago", now) == now - 90 * 86_400
+
+    """
+    Where a date exists, the newest it could be is the date it is.
+    """
+    assert newest_possible("Posted 5 Days Ago", now) == now - 5 * 86_400
+    assert newest_possible(None, now) is None

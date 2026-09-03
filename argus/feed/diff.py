@@ -221,6 +221,11 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
     )
     rows = []
     skipped = 0
+    """
+    Once per batch, not once per posting: the window is rolling, and a
+    cutoff that moved mid-batch would accept and reject identical postings.
+    """
+    cutoff = config.posted_after()
     for (ats, slug), postings in fetched.items():
         for p in postings:
             role = classify(p.title, p.department)
@@ -258,13 +263,25 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             actually gave us can fail this -- a posting that states no date
             is kept, exactly as one that states no location is.
             """
-            if (
-                config.STORE_POSTED_AFTER
-                and p.posted_at
-                and p.posted_at < config.STORE_POSTED_AFTER
-            ):
-                skipped += 1
-                continue
+            """
+            Reject on the newest date the posting could have, which is the
+            date itself when the source gives one. Workday gives "Posted 30+
+            Days Ago" instead -- not a date, but a bound, and a bound is
+            exactly what a rejection test needs: if even the newest date this
+            could be is older than the window, it is too old whatever the
+            truth is. That settles 71% of Workday's undated postings with no
+            second request, and stores nothing it cannot support.
+
+            An exempt source is skipped entirely rather than passed through
+            the test, because for it the test has no meaning: BambooHR
+            publishes no date anywhere, so filtering it on age would delete
+            the source rather than filter it.
+            """
+            if ats not in config.AGE_EXEMPT_ATS:
+                newest = p.posted_at or p.posted_bound
+                if cutoff and newest and newest < cutoff:
+                    skipped += 1
+                    continue
             rows.append(
                 (
                     ats,

@@ -32,7 +32,7 @@ def conn(tmp_path):
     return c
 
 
-def post(eid, title="Engineer", location="NYC", posted_at=None):
+def post(eid, title="Engineer", location="NYC", posted_at=None, posted_bound=None):
     return Posting(
         ats="ashby",
         slug="acme",
@@ -41,6 +41,7 @@ def post(eid, title="Engineer", location="NYC", posted_at=None):
         url=f"https://jobs.ashbyhq.com/acme/{eid}",
         location=location,
         posted_at=posted_at,
+        posted_bound=posted_bound,
     )
 
 
@@ -421,7 +422,7 @@ def test_a_posting_older_than_the_cutoff_is_not_stored(conn, monkeypatch):
     not be able to fill the table with them."""
     from argus.feed import diff
 
-    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 1_782_864_000)
+    monkeypatch.setattr(config, "posted_after", lambda: 1_782_864_000)
     diff.run_batch(
         conn,
         {
@@ -441,7 +442,7 @@ def test_a_posting_with_no_date_is_kept(conn, monkeypatch):
     ATSs on none."""
     from argus.feed import diff
 
-    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 1_782_864_000)
+    monkeypatch.setattr(config, "posted_after", lambda: 1_782_864_000)
     diff.run_batch(conn, {("ashby", "acme"): [post("3", posted_at=None)]})
     assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 1
 
@@ -475,7 +476,7 @@ def test_a_missing_posted_date_is_filled_in_later(conn, monkeypatch):
     read relative dates after 54,843 of its postings were already stored."""
     from argus.feed import diff
 
-    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] is None
 
@@ -494,7 +495,7 @@ def test_a_date_we_already_have_is_never_overwritten(conn, monkeypatch):
     different must not be able to rewrite history."""
     from argus.feed import diff
 
-    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_700_000_000)]})
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_790_000_000)]})
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_700_000_000
@@ -506,7 +507,7 @@ def test_region_is_computed_at_ingest(conn, monkeypatch):
     insert, like role_family, for the same reason."""
     from argus.feed import diff
 
-    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
     diff.run_batch(
         conn,
         {
@@ -530,9 +531,97 @@ def test_a_posting_that_moves_gets_a_new_region(conn, monkeypatch):
     posting relisted in another office is genuinely somewhere else."""
     from argus.feed import diff
 
-    monkeypatch.setattr(config, "STORE_POSTED_AFTER", 0)
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
     diff.run_batch(conn, {("ashby", "acme"): [post("1", location="Austin, TX")]})
     assert conn.execute("SELECT region FROM jobs").fetchone()["region"] == "us"
 
     diff.run_batch(conn, {("ashby", "acme"): [post("1", location="Dublin, Ireland")]})
     assert conn.execute("SELECT region FROM jobs").fetchone()["region"] == "europe"
+
+
+def test_a_bound_is_enough_to_reject_but_never_to_store(conn, monkeypatch):
+    """Workday says "Posted 30+ Days Ago" for 71% of its undated postings.
+    That is not a date, but it is a bound -- at least thirty days old, so at
+    most now-30d -- and a bound is exactly what a rejection test needs. If
+    even the newest date it could have is older than the cutoff, it is too
+    old whatever the truth is."""
+    from argus.feed import diff
+
+    cutoff = 1_782_864_000
+    monkeypatch.setattr(config, "posted_after", lambda: cutoff)
+
+    diff.run_batch(
+        conn,
+        {
+            ("ashby", "acme"): [
+                post("old", posted_at=None, posted_bound=cutoff - 86_400),
+                post("new", posted_at=None, posted_bound=cutoff + 86_400),
+            ]
+        },
+    )
+    rows = {
+        r["external_id"]: r["posted_at"]
+        for r in conn.execute("SELECT external_id, posted_at FROM jobs")
+    }
+    assert "old" not in rows, "the bound rejected it"
+    assert "new" in rows, "the bound could not reject it, so it is kept"
+    assert rows["new"] is None, "and the bound was never stored as a date"
+
+
+def test_a_bound_does_not_make_a_posting_look_edited():
+    """It is not in _HASHED, so a posting acquiring one is not news."""
+    from argus.core.models import Posting
+
+    plain = Posting(ats="a", slug="b", external_id="1", title="T", url="u")
+    bounded = Posting(
+        ats="a", slug="b", external_id="1", title="T", url="u", posted_bound=1_788_400_000
+    )
+    assert plain.content_hash() == bounded.content_hash()
+
+
+def test_a_source_with_no_dates_at_all_is_exempt(conn, monkeypatch):
+    """BambooHR publishes no date in its list endpoint, none in the detail
+    page, nothing to parse and nothing to bound. Filtering it on age would
+    not filter it -- it would delete the source, all 3,133 postings, 2,223 of
+    them engineering roles reachable through no other ATS."""
+    from argus.feed import diff
+
+    conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
+                    VALUES ('bamboohr','acme','active',1,0)""")
+    monkeypatch.setattr(config, "posted_after", lambda: 1_790_000_000)
+    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
+
+    undated = Posting(
+        ats="bamboohr",
+        slug="acme",
+        external_id="1",
+        title="Software Engineer",
+        url="https://acme.bamboohr.com/careers/1",
+    )
+    diff.run_batch(conn, {("bamboohr", "acme"): [undated]})
+    assert (
+        conn.execute("SELECT COUNT(*) n FROM jobs WHERE ats='bamboohr'").fetchone()["n"] == 1
+    ), "kept despite having no date"
+
+
+def test_the_exemption_does_not_leak_to_other_sources(conn, monkeypatch):
+    """An exemption that applied everywhere would be a disabled filter."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "posted_after", lambda: 1_790_000_000)
+    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_700_000_000)]})
+    assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 0
+
+
+def test_the_window_is_rolling_and_evaluated_when_used():
+    """A poll runs for hours. A cutoff fixed at import would drift from the
+    window the operator asked for, and a 29-day window is chosen precisely
+    so Workday's 30-day bound always falls outside it."""
+    import time
+
+    from argus.core import config as cfg
+
+    assert cfg.STORE_POSTED_WITHIN_DAYS <= 29, "30 sits on the bound and decides nothing"
+    a = cfg.posted_after()
+    assert abs((time.time() - a) - cfg.STORE_POSTED_WITHIN_DAYS * 86400) < 5

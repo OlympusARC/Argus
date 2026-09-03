@@ -42,6 +42,18 @@ class Posting:
     workplace_type: str | None = None
     is_remote: bool | None = None
     posted_at: int | None = None  # epoch seconds, UTC
+
+    """
+    The newest date this posting could have, when the source gives a bound
+    rather than a date. Workday says "Posted 30+ Days Ago", which is not a
+    date and must never be stored as one -- but it does say the posting is at
+    most thirty days old, which is enough to reject it against a cutoff.
+
+    Never written to the database, and never in _HASHED. It exists so the
+    ingest filter can answer "is this definitely too old" without inventing a
+    precision the source does not have.
+    """
+    posted_bound: int | None = None
     compensation: dict[str, Any] | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
