@@ -150,28 +150,25 @@ reversible; not storing the row is not.
 STORE_REGIONS = set(os.getenv("ARGUS_STORE_REGIONS", "us,europe,remote,unknown").split(","))
 
 """
-How recently a posting must have been published, in days. 0 disables it.
+The oldest posting worth storing, as a unix epoch. 0 disables the check.
 
 A posting the board still lists but dates to 2019 is not a live job; some
 employers never take a listing down. 16% of the corpus was once over a year
 old and the oldest still-open row was dated 2009.
 
-Rolling rather than a fixed date, and 29 days rather than 30, because of how
-Workday reports age. It gives "Posted 30+ Days Ago" for 71% of the postings
-it will not date -- not a date, but a bound: at least thirty days old. A
-bound rejects cleanly only against a cutoff newer than itself, so a window of
-30 sits exactly on the boundary and decides nothing, and a fixed date decides
-everything today and less each day after. At 29 the bound is always decisive
-and Workday never contributes an undated row again.
+A fixed date rather than a rolling window, because the exact dates are
+already computed on the fly: "Posted 20 Days Ago" becomes a real date at
+fetch time and is filtered like any other. The only phrasing that resists is
+"Posted 30+ Days Ago", which is a bound rather than a date -- at least thirty
+days old, so at most now-30d.
 
-Measured on 180 live Workday postings: a 30-day window left 8 undated, a
-29-day window left none.
-
-The cost is real and deliberate: a posting published 40 days ago and still
-open is excluded. This keeps a feed of what is recent, not a catalogue of
-everything open.
+That bound rejects cleanly while the cutoff is newer than it, which it is
+today and stops being about five weeks after the cutoff. After that those
+postings arrive undated instead of rejected -- a shrinking trickle, since it
+only affects postings first seen when already a month old, and a setting that
+does not move under you is worth more than closing that gap.
 """
-STORE_POSTED_WITHIN_DAYS = int(os.getenv("ARGUS_STORE_POSTED_WITHIN_DAYS", "29"))
+STORE_POSTED_AFTER = int(os.getenv("ARGUS_STORE_POSTED_AFTER", "1786320000"))
 
 """
 Sources that publish no posted date at all, and are therefore exempt.
@@ -181,25 +178,19 @@ page HTML, nothing to parse and nothing to bound. Applying an age filter to
 it would not filter -- it would delete the source, all 3,133 postings, of
 which 2,223 are engineering roles reachable through no other ATS.
 
-An exemption is honest where a default is not. The filter asks "is this
-older than the window", and for BambooHR the answer is not "no", it is "that
-cannot be determined" -- and the same rule the region filter follows applies:
-refuse what asserts it is outside, keep what cannot say.
+The same rule the region filter follows: refuse what asserts it is outside,
+keep what cannot say.
 """
 AGE_EXEMPT_ATS = {x for x in os.getenv("ARGUS_AGE_EXEMPT_ATS", "bamboohr").split(",") if x}
 
 
 def posted_after() -> int:
-    """The oldest acceptable posting date, evaluated now.
+    """The oldest acceptable posting date.
 
-    A function rather than a constant because a poll runs for hours; a value
-    fixed at import would drift from the window the operator asked for.
+    A function so a test can move it and so the value is read when used
+    rather than when imported.
     """
-    import time
-
-    if not STORE_POSTED_WITHIN_DAYS:
-        return 0
-    return int(time.time() - STORE_POSTED_WITHIN_DAYS * 86400)
+    return STORE_POSTED_AFTER
 
 
 """

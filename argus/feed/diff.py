@@ -102,7 +102,20 @@ edit statement seeing the same row a second time.
 """
 REOPEN = """
 UPDATE jobs SET title=s.title, location=s.location, locations_json=s.locations_json,
-                url=s.url, posted_at=s.posted_at, content_hash=s.content_hash,
+                url=s.url, content_hash=s.content_hash,
+                /*
+                 * COALESCE, never assignment. A posting is dated when we
+                 * first see it fresh -- Workday says "Posted 5 Days Ago" and
+                 * we compute a real date. A month later the same posting
+                 * reads "Posted 30+ Days Ago", which the adapter cannot date,
+                 * so it arrives as NULL. Assigning that would erase a date we
+                 * already knew, and only for postings that happened to be
+                 * edited: silent, selective data loss.
+                 *
+                 * A source correcting a date it previously gave still wins,
+                 * because a real value coalesces over the stored one.
+                 */
+                posted_at=COALESCE(s.posted_at, jobs.posted_at),
                 region=s.region,
                 role_family=s.role_family, is_engineering=s.is_engineering,
                 is_fde=s.is_fde, seniority=s.seniority, classified_by=s.classified_by,
@@ -139,7 +152,20 @@ WHERE jobs.ats=s.ats AND jobs.slug=s.slug AND jobs.external_id=s.external_id
 
 EDIT = """
 UPDATE jobs SET title=s.title, location=s.location, locations_json=s.locations_json,
-                url=s.url, posted_at=s.posted_at, content_hash=s.content_hash,
+                url=s.url, content_hash=s.content_hash,
+                /*
+                 * COALESCE, never assignment. A posting is dated when we
+                 * first see it fresh -- Workday says "Posted 5 Days Ago" and
+                 * we compute a real date. A month later the same posting
+                 * reads "Posted 30+ Days Ago", which the adapter cannot date,
+                 * so it arrives as NULL. Assigning that would erase a date we
+                 * already knew, and only for postings that happened to be
+                 * edited: silent, selective data loss.
+                 *
+                 * A source correcting a date it previously gave still wins,
+                 * because a real value coalesces over the stored one.
+                 */
+                posted_at=COALESCE(s.posted_at, jobs.posted_at),
                 region=s.region,
                 role_family=s.role_family, is_engineering=s.is_engineering,
                 is_fde=s.is_fde, seniority=s.seniority, classified_by=s.classified_by,

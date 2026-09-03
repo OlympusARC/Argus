@@ -614,14 +614,36 @@ def test_the_exemption_does_not_leak_to_other_sources(conn, monkeypatch):
     assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 0
 
 
-def test_the_window_is_rolling_and_evaluated_when_used():
-    """A poll runs for hours. A cutoff fixed at import would drift from the
-    window the operator asked for, and a 29-day window is chosen precisely
-    so Workday's 30-day bound always falls outside it."""
-    import time
+def test_an_edit_never_erases_a_date_we_already_had(conn, monkeypatch):
+    """The reason an hourly poll is enough: a posting is dated when first
+    seen fresh, and keeps that date as it ages. Workday says "Posted 5 Days
+    Ago" on day five and "Posted 30+ Days Ago" on day forty -- the second is
+    undateable, so it arrives as NULL.
 
-    from argus.core import config as cfg
+    Assigning that NULL erased a date we already knew, and only for postings
+    that happened to be edited. Silent and selective, which is the worst
+    shape a data-loss bug can have.
+    """
+    from argus.feed import diff
 
-    assert cfg.STORE_POSTED_WITHIN_DAYS <= 29, "30 sits on the bound and decides nothing"
-    a = cfg.posted_after()
-    assert abs((time.time() - a) - cfg.STORE_POSTED_WITHIN_DAYS * 86400) < 5
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_786_000_000)]})
+    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_786_000_000
+
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", title="Senior", posted_at=None)]})
+    row = conn.execute("SELECT posted_at, title FROM jobs").fetchone()
+    assert row["title"] == "Senior", "the edit applied"
+    assert row["posted_at"] == 1_786_000_000, "and the date survived it"
+
+
+def test_a_source_correcting_a_date_still_wins(conn, monkeypatch):
+    """COALESCE preserves, it does not freeze. A real value replaces the
+    stored one; only NULL is ignored."""
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_786_000_000)]})
+    diff.run_batch(
+        conn, {("ashby", "acme"): [post("1", title="Staff", posted_at=1_787_000_000)]}
+    )
+    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_787_000_000
