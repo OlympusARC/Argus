@@ -118,10 +118,26 @@ def canned(monkeypatch):
     return serve
 
 
+"""
+Resolve by class, not through the registry.
+
+An adapter can be correct and still not be registered -- workable's is, and
+it is unregistered because Cloudflare will not serve us, not because it
+stopped mapping payloads. These tests are about the mapping, so they should
+not care whether the pipeline currently polls it.
+"""
+
+
+def adapter_for(ats: str):
+    from argus.adapters.workable import WorkableAdapter
+
+    return adapters.get(ats) or {"workable": WorkableAdapter()}[ats]
+
+
 @pytest.mark.parametrize("ats", sorted(PAYLOADS))
 def test_adapter_maps_the_vendor_payload(ats, canned):
     canned(PAYLOADS[ats])
-    postings = adapters.get(ats).fetch("acme")
+    postings = adapter_for(ats).fetch("acme")
     assert len(postings) == 1
     p = postings[0]
     external_id, title = EXPECTED[ats]
@@ -147,16 +163,16 @@ def test_a_posting_with_no_id_is_skipped_not_invented(ats, canned):
     for field in ("id", "shortcode"):
         rows[0].pop(field, None)
     canned(stripped)
-    assert adapters.get(ats).fetch("acme") == []
+    assert adapter_for(ats).fetch("acme") == []
 
 
 @pytest.mark.parametrize("ats", sorted(PAYLOADS))
 def test_the_same_payload_hashes_the_same_twice(ats, canned):
     """content_hash drives edit detection; instability would flag every poll."""
     canned(PAYLOADS[ats])
-    first = adapters.get(ats).fetch("acme")[0].content_hash()
+    first = adapter_for(ats).fetch("acme")[0].content_hash()
     canned(PAYLOADS[ats])
-    assert adapters.get(ats).fetch("acme")[0].content_hash() == first
+    assert adapter_for(ats).fetch("acme")[0].content_hash() == first
 
 
 def test_paginated_adapters_refuse_to_return_a_partial_board(canned):
@@ -172,3 +188,54 @@ def test_every_registered_adapter_declares_its_ats():
     for name, adapter in adapters.ADAPTERS.items():
         assert adapter.ats == name
     assert not set(adapters.supported()) & set(adapters.PLANNED)
+
+
+"""
+Rate limiting that is really a refusal.
+"""
+
+
+def test_retry_after_is_capped():
+    """Workable sits behind Cloudflare, which answers a rate-limited client
+    with Retry-After: 39481 -- eleven hours. urllib3 obeys it literally, and
+    it holds the per-host slot while it sleeps, so one request took a
+    twelve-thread poll to zero boards in two hours."""
+
+    class FakeResponse:
+        headers = {"Retry-After": "39481"}
+
+    capped = http.CappedRetry(total=3, respect_retry_after_header=True)
+    assert capped.get_retry_after(FakeResponse()) == http.RETRY_AFTER_MAX
+
+
+def test_a_reasonable_retry_after_is_still_honoured():
+    """The cap is a ceiling, not a replacement. A server asking for a few
+    seconds is being cooperative and should be believed."""
+
+    class FakeResponse:
+        headers = {"Retry-After": "5"}
+
+    capped = http.CappedRetry(total=3, respect_retry_after_header=True)
+    assert capped.get_retry_after(FakeResponse()) == 5
+
+
+def test_no_header_stays_none():
+    class FakeResponse:
+        headers: dict = {}
+
+    assert http.CappedRetry(total=3).get_retry_after(FakeResponse()) is None
+
+
+def test_workable_is_not_polled_but_is_still_recognised():
+    """The adapter works; Cloudflare does not let us use it. Its boards and
+    postings stay in the database, and the URL router still parses its URLs
+    so discovery keeps recording them."""
+    from argus import adapters
+    from argus.core import urls
+
+    assert "workable" not in adapters.supported()
+    assert "workable" in adapters.PLANNED
+    assert adapters.get("workable") is None
+
+    ref = urls.parse("https://apply.workable.com/acme/j/ABC123/")
+    assert ref is not None and ref.ats == "workable"

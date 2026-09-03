@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from collections import defaultdict
 from contextlib import contextmanager
@@ -26,12 +27,43 @@ _host_locks: dict[str, threading.Semaphore] = defaultdict(
 _host_locks_guard = threading.Lock()
 
 
+"""
+The longest we will wait because a server asked us to.
+
+respect_retry_after_header is right in principle and dangerous unbounded.
+Workable sits behind Cloudflare, which answers a rate-limited client with
+
+    HTTP 429   Retry-After: 39481
+
+-- eleven hours. urllib3 obeys it literally, so one request slept for eleven
+hours and, with total=3, could have slept thirty-three. Worse, it holds the
+per-host slot the whole time, so every other worker queues behind it: a
+twelve-thread poll went to zero boards in two hours and would have stayed
+there overnight.
+
+A rate limiter naming a delay in hours is not asking us to wait, it is
+telling us to go away. Past this cap the retry is abandoned and the fetch
+fails, which the caller already knows how to record.
+"""
+RETRY_AFTER_MAX = float(os.getenv("ARGUS_RETRY_AFTER_MAX", "30"))
+
+
+class CappedRetry(Retry):
+    """Retry that will not honour an unreasonable Retry-After."""
+
+    def get_retry_after(self, response):
+        after = super().get_retry_after(response)
+        if after is None:
+            return None
+        return min(after, RETRY_AFTER_MAX)
+
+
 def session() -> requests.Session:
     """Thread-local session: connection pooling without cross-thread sharing."""
     s = getattr(_local, "session", None)
     if s is None:
         s = requests.Session()
-        retry = Retry(
+        retry = CappedRetry(
             total=3,
             backoff_factor=1.5,
             status_forcelist=(429, 500, 502, 503, 504),

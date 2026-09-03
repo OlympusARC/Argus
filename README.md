@@ -276,6 +276,15 @@ the linked project.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.
+- **`Retry-After` is a request, not an instruction.** Cloudflare answers a
+  rate-limited client with `Retry-After: 39481` — eleven hours — and urllib3
+  obeys it literally, while holding the per-host slot. One request took a
+  twelve-thread poll to zero boards in two hours. A delay named in hours is a
+  refusal; `http.RETRY_AFTER_MAX` caps what we will wait for.
+- **A connection held across slow work is a connection you will lose.** A poll
+  keeps one session for twenty minutes and spends nearly all of it on HTTP, so
+  the pooler reclaims it and the next write finds a closed socket. The wrapper
+  reconnects once; the statements are idempotent, which is what makes that safe.
 - **The free-tier limit that binds is tokens per minute, not requests per day.**
   Groq advertises 1,000 RPD and enforces 8,000 TPM, and `max_tokens` is charged
   as *requested* rather than as used — so a batch asking for 8,192 was refused
