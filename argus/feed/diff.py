@@ -303,16 +303,15 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
             truth is. That settles 71% of Workday's undated postings with no
             second request, and stores nothing it cannot support.
 
-            An exempt source is skipped entirely rather than passed through
-            the test, because for it the test has no meaning: BambooHR
-            publishes no date anywhere, so filtering it on age would delete
-            the source rather than filter it.
+            A posting with neither a date nor a bound cannot fail this, and
+            is not meant to: BambooHR publishes nothing to test, and rejecting
+            on silence would delete the source rather than filter it. It is
+            dated below instead.
             """
-            if ats not in config.AGE_EXEMPT_ATS:
-                newest = p.posted_at or p.posted_bound
-                if cutoff and newest and newest < cutoff:
-                    skipped += 1
-                    continue
+            newest = p.posted_at or p.posted_bound
+            if cutoff and newest and newest < cutoff:
+                skipped += 1
+                continue
             rows.append(
                 (
                     ats,
@@ -330,7 +329,7 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
                     role.seniority,
                     role.ruleset,
                     geo.region(p.location),
-                    _fallback_posted_at(ats, p, cutoff_ts),
+                    _fallback_posted_at(p, cutoff_ts),
                 )
             )
     if skipped:
@@ -347,33 +346,31 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
         )
 
 
-def _fallback_posted_at(ats: str, posting, ts: int) -> int | None:
-    """A stand-in posted date, for sources that publish none of their own.
+def _fallback_posted_at(posting, ts: int) -> int | None:
+    """When we first saw it, for a posting the source would not date.
 
-    Only for AGE_EXEMPT_ATS -- BambooHR alone. It exposes no date anywhere,
-    so the alternative is a permanently empty column on 3% of the feed, and a
-    Posted column blank for one source and populated for every other reads as
-    a bug rather than as an absence.
+    Applies to every source, not a nominated few. BambooHR publishes no date
+    at all; Workday omits the field on a small share of its postings; either
+    way the reader is looking at a Posted column with a hole in it, and a
+    column blank for some rows and filled for others reads as a bug rather
+    than as an absence -- particularly now the dashboard sorts by it.
 
-    The window's own start date, deliberately, rather than the moment we
-    looked. Every BambooHR posting then carries the same value, which is
-    visibly a floor rather than a measurement: no reader will mistake five
-    thousand postings sharing one date for five thousand postings published
-    that day. Using the discovery time instead would have spread them across
-    whenever the poll happened to run, which looks like data and is not.
+    Only reached by a posting the age filter has already accepted, which is
+    what keeps this honest. "Posted 30+ Days Ago" carries a bound, gets
+    rejected there, and never arrives here to be stamped with today. What
+    does arrive is a posting nothing is known about, and the most defensible
+    thing known about it is when it turned up.
 
-    It also makes the refills comparable. A discovery date changes on every
-    rebuild, so two runs of the same corpus would disagree about when the
-    same posting appeared.
+    Under hourly polling that is within an hour of the truth for anything
+    arriving from now on. For the postings already on a board the first time
+    we look it is simply the day we looked -- and those age out.
 
-    Written once, at insert -- see discovered_at in the staged table. The
-    update paths COALESCE, so a later poll cannot move it.
+    Written once, at insert, through the discovered_at staged column the
+    update paths cannot see. Written on every poll it would re-date a posting
+    each time it was edited, and sort it to the top of the dashboard for a
+    changed title.
     """
-    if posting.posted_at is not None:
-        return None
-    from ..core import config
-
-    return config.posted_after() if ats in config.AGE_EXEMPT_ATS else None
+    return None if posting.posted_at is not None else ts
 
 
 def _rows(cur) -> list[dict]:

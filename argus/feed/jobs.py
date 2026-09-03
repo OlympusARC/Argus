@@ -40,7 +40,9 @@ def _row(p: Posting, ts: int, source: str) -> tuple:
         p.location,
         _locations(p),
         p.url,
-        p.posted_at,
+        # The same fallback the poll path applies: a posting nobody will date
+        # takes the moment we saw it, so the column is never selectively empty.
+        p.posted_at if p.posted_at is not None else ts,
         ts,
         ts,
         p.content_hash(),

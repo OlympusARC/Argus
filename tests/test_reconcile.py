@@ -469,25 +469,22 @@ def test_thirty_plus_days_is_not_a_date():
     assert posted_from_relative("nonsense") is None
 
 
-def test_a_missing_posted_date_is_filled_in_later(conn, monkeypatch):
-    """posted_at is not in _HASHED so it cannot make a posting look edited --
-    which also means a row cannot gain one through the edit path, because
-    gaining a date does not change the hash. The Workday adapter learned to
-    read relative dates after 54,843 of its postings were already stored."""
+def test_a_null_posted_date_is_filled_in_by_a_later_poll(conn, monkeypatch):
+    """The ingest path no longer produces a null -- every posting is dated,
+    by the source or by the run. This still matters for rows written before
+    that was true, and for any future adapter that learns to date postings it
+    once could not, which is exactly what happened when Workday learned to
+    read "Posted 5 Days Ago" after 54,843 of its rows were already stored.
+    """
     from argus.feed import diff
 
     monkeypatch.setattr(config, "posted_after", lambda: 0)
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
-    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] is None
+    conn.execute("UPDATE jobs SET posted_at = NULL")
+    conn.commit()
 
-    """
-    Same posting, same hash -- only the date is new. It is touched, not
-    edited, so nothing but the column moves.
-    """
-    changed = diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_790_000_000)]})
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_790_000_000)]})
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_790_000_000
-    assert changed[("ashby", "acme")]["edited"] == [], "a filled-in date is not an edit"
-    assert changed[("ashby", "acme")]["new"] == []
 
 
 def test_a_date_we_already_have_is_never_overwritten(conn, monkeypatch):
@@ -565,7 +562,8 @@ def test_a_bound_is_enough_to_reject_but_never_to_store(conn, monkeypatch):
     }
     assert "old" not in rows, "the bound rejected it"
     assert "new" in rows, "the bound could not reject it, so it is kept"
-    assert rows["new"] is None, "and the bound was never stored as a date"
+    assert rows["new"] != cutoff + 86_400, "the bound itself was never stored"
+    assert abs(rows["new"] - jobs.now()) < 60, "it took the run time instead"
 
 
 def test_a_bound_does_not_make_a_posting_look_edited():
@@ -589,7 +587,6 @@ def test_a_source_with_no_dates_at_all_is_exempt(conn, monkeypatch):
     conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
                     VALUES ('bamboohr','acme','active',1,0)""")
     monkeypatch.setattr(config, "posted_after", lambda: 1_790_000_000)
-    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
 
     undated = Posting(
         ats="bamboohr",
@@ -609,7 +606,6 @@ def test_the_exemption_does_not_leak_to_other_sources(conn, monkeypatch):
     from argus.feed import diff
 
     monkeypatch.setattr(config, "posted_after", lambda: 1_790_000_000)
-    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=1_700_000_000)]})
     assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 0
 
@@ -649,20 +645,16 @@ def test_a_source_correcting_a_date_still_wins(conn, monkeypatch):
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_787_000_000
 
 
-def test_a_source_with_no_dates_gets_the_window_start(conn, monkeypatch):
-    """BambooHR publishes no date anywhere, so the alternative is a
-    permanently empty column on 3% of the feed.
-
-    The window's start rather than the moment we looked, so every one of its
-    postings carries the same value -- visibly a floor rather than a
-    measurement. Nobody mistakes five thousand postings sharing one date for
-    five thousand published that day."""
+def test_a_posting_the_source_will_not_date_gets_the_run_time(conn, monkeypatch):
+    """Every source, not a nominated few. A Posted column blank for some rows
+    and filled for others reads as a bug rather than as an absence, and the
+    most defensible thing known about an undated posting is when it turned
+    up."""
     from argus.feed import diff
 
     conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
                     VALUES ('bamboohr','acme','active',1,0)""")
     monkeypatch.setattr(config, "posted_after", lambda: 0)
-    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
 
     diff.run_batch(
         conn,
@@ -679,7 +671,7 @@ def test_a_source_with_no_dates_gets_the_window_start(conn, monkeypatch):
         },
     )
     got = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
-    assert got == config.posted_after(), "the window start, not the poll time"
+    assert got is not None and abs(got - jobs.now()) < 60, "the moment we saw it"
 
 
 def test_the_stand_in_date_is_written_once_not_refreshed(conn, monkeypatch):
@@ -691,7 +683,6 @@ def test_the_stand_in_date_is_written_once_not_refreshed(conn, monkeypatch):
     conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
                     VALUES ('bamboohr','acme','active',1,0)""")
     monkeypatch.setattr(config, "posted_after", lambda: 0)
-    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
 
     def p(title):
         return Posting(
@@ -713,12 +704,27 @@ def test_the_stand_in_date_is_written_once_not_refreshed(conn, monkeypatch):
     assert after["posted_at"] == first - 86_400 * 30, "the date did not move"
 
 
-def test_other_sources_are_not_given_a_stand_in_date(conn, monkeypatch):
-    """An undated posting from a source that does publish dates is a fact
-    about that posting, not a gap to paper over."""
+def test_every_source_gets_the_fallback_not_just_one(conn, monkeypatch):
+    """An undated Ashby posting has the same hole in the same column as an
+    undated BambooHR one."""
     from argus.feed import diff
 
     monkeypatch.setattr(config, "posted_after", lambda: 0)
-    monkeypatch.setattr(config, "AGE_EXEMPT_ATS", {"bamboohr"})
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
-    assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] is None
+    got = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
+    assert got is not None and abs(got - jobs.now()) < 60
+
+
+def test_a_bounded_posting_is_rejected_before_it_can_be_stamped(conn, monkeypatch):
+    """What keeps the fallback honest. "Posted 30+ Days Ago" carries a bound,
+    fails the age test, and never reaches the fallback to be stamped with
+    today -- which would turn a 2019 posting into a fresh one."""
+    from argus.feed import diff
+
+    cutoff = 1_786_320_000
+    monkeypatch.setattr(config, "posted_after", lambda: cutoff)
+    diff.run_batch(
+        conn,
+        {("ashby", "acme"): [post("old", posted_at=None, posted_bound=cutoff - 86_400)]},
+    )
+    assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 0

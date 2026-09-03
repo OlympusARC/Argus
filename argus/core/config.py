@@ -170,19 +170,6 @@ does not move under you is worth more than closing that gap.
 """
 STORE_POSTED_AFTER = int(os.getenv("ARGUS_STORE_POSTED_AFTER", "1786320000"))
 
-"""
-Sources that publish no posted date at all, and are therefore exempt.
-
-BambooHR is the only one: no date in its list endpoint, none in the detail
-page HTML, nothing to parse and nothing to bound. Applying an age filter to
-it would not filter -- it would delete the source, all 3,133 postings, of
-which 2,223 are engineering roles reachable through no other ATS.
-
-The same rule the region filter follows: refuse what asserts it is outside,
-keep what cannot say.
-"""
-AGE_EXEMPT_ATS = {x for x in os.getenv("ARGUS_AGE_EXEMPT_ATS", "bamboohr").split(",") if x}
-
 
 def posted_after() -> int:
     """The oldest acceptable posting date.

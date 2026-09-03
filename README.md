@@ -202,7 +202,6 @@ building anything.
 | `ARGUS_STORE_FAMILIES` | which role families are stored at all (see below) |
 | `ARGUS_STORE_REGIONS` | which regions are stored; `other` is the only rejection |
 | `ARGUS_STORE_POSTED_AFTER` | the oldest posting worth storing, as an epoch |
-| `ARGUS_AGE_EXEMPT_ATS` | sources that publish no date, so cannot be aged |
 | `GROQ_API_KEY` / `NVIDIA_API_KEY` / `GEMINI_API_KEY` | the agents. Absent, they skip |
 | `GITHUB_TOKEN`, `BRAVE_API_KEY`, `ARGUS_SEC_CONTACT` | individual discovery sources |
 
@@ -287,14 +286,14 @@ the linked project.
   cannot be dated at all. Which is why the update paths `COALESCE` rather than
   assign — assigning erased the date we already had, and only for postings that
   happened to be edited.
-- **An age filter on a source with no dates is a delete, not a filter.**
-  BambooHR publishes none — not in the list endpoint, not in the detail page —
-  so `ARGUS_AGE_EXEMPT_ATS` exempts it rather than silently discarding 3,133
-  postings, 2,223 of them engineering roles reachable through no other ATS.
-  Those take the window's start date instead — the same value for all of them,
-  which reads as the floor it is rather than as a measurement. Written once at
-  insert: written on every poll it would re-date the posting each time it was
-  edited, and sort it to the top of the dashboard for changing a title.
+- **A posting nobody will date takes the time we saw it.** BambooHR publishes
+  no date anywhere and Workday omits the field on some postings; a Posted
+  column blank for those rows and filled for the rest reads as a bug rather
+  than as an absence. What keeps that honest is the age filter running first —
+  "Posted 30+ Days Ago" carries a bound, is rejected there, and never reaches
+  the fallback to be stamped with today. And it is written once, at insert:
+  written on every poll it would re-date a posting whenever it was edited, and
+  sort it to the top of the dashboard for a changed title.
 - **GitHub follows a rename forever, so a stale repo entry keeps working.** It
   costs a request and hides a duplicate: two entries in the README-only list
   resolved to repos already read as structured JSON, so the same data arrived
