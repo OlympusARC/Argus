@@ -261,57 +261,23 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
         for p in postings:
             role = classify(p.title, p.department)
             """
+            The same predicate the seed path uses -- see feed/jobs.keep.
             Filtered here rather than after storing, because the corpus is
-            82% retail, clinical and sales work that the product never serves
-            -- 725,539 postings of a 500 MB budget spent on Domino's cashiers.
+            82% retail, clinical and sales work that the product never serves,
+            and storing it spends a 500 MB budget on postings no query asks
+            for.
 
             The cost is that a posting we never store can never be
             reclassified: a later ruleset that catches something this one
-            missed only applies to postings arriving after it. That is
-            acceptable because every live board is re-polled hourly, so a
-            broadened ruleset recovers its misses within a day -- but it is a
-            real trade, which is why it is a setting rather than a constant.
+            missed only applies to postings arriving after it. Acceptable
+            because every live board is re-polled hourly, so a broadened
+            ruleset recovers its misses within a day -- but a real trade,
+            which is why it is a setting rather than a constant.
             """
-            if config.STORE_ONLY_TECHNICAL and role.family not in config.STORE_FAMILIES:
+            if not jobs_mod.keep(ats, p, role, cutoff):
                 skipped += 1
                 continue
 
-            """
-            And the same test on where the job is, for the same reason and at
-            the same cost. The region policy is far more permissive than the
-            family one: it rejects only a posting that names somewhere
-            outside the target, and keeps every posting that simply does not
-            say. A location field is optional in most ATS schemas, and 9.6%
-            of the corpus leaves it empty -- refusing those would discard
-            every posting from a board whose ATS never fills it in.
-            """
-            if not geo.in_target(p.location):
-                skipped += 1
-                continue
-
-            """
-            And the same test on when it was posted. Only a date the board
-            actually gave us can fail this -- a posting that states no date
-            is kept, exactly as one that states no location is.
-            """
-            """
-            Reject on the newest date the posting could have, which is the
-            date itself when the source gives one. Workday gives "Posted 30+
-            Days Ago" instead -- not a date, but a bound, and a bound is
-            exactly what a rejection test needs: if even the newest date this
-            could be is older than the window, it is too old whatever the
-            truth is. That settles 71% of Workday's undated postings with no
-            second request, and stores nothing it cannot support.
-
-            A posting with neither a date nor a bound cannot fail this, and
-            is not meant to: BambooHR publishes nothing to test, and rejecting
-            on silence would delete the source rather than filter it. It is
-            dated below instead.
-            """
-            newest = p.posted_at or p.posted_bound
-            if cutoff and newest and newest < cutoff:
-                skipped += 1
-                continue
             rows.append(
                 (
                     ats,

@@ -306,6 +306,11 @@ the linked project.
   the batch diff bounded by boards rather than postings, and `seed` at one
   INSERT a posting (263s → 63s). Anything iterating over rows and calling
   `execute` is doing latency, not computation.
+- **A filter that guards one door is not a filter.** The poll path had the
+  family, region and age tests; the seed path — the one discovery writes
+  through — had none. 2,036 postings arrived carrying no ingest rules at all:
+  postings from 2023 under a 2026 cutoff, families the product does not serve,
+  and a null region on every one. Both paths now call `jobs.keep`.
 - **A silent zero is almost never the world being empty.** A source that returns
   nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
   one host of ten for months while every run looked entirely normal.

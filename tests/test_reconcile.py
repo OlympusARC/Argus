@@ -728,3 +728,60 @@ def test_a_bounded_posting_is_rejected_before_it_can_be_stamped(conn, monkeypatc
         {("ashby", "acme"): [post("old", posted_at=None, posted_bound=cutoff - 86_400)]},
     )
     assert conn.execute("SELECT COUNT(*) n FROM jobs").fetchone()["n"] == 0
+
+
+def test_the_seed_path_obeys_the_same_filters_as_the_poll_path(conn, monkeypatch):
+    """A filter that guards one door is not a filter.
+
+    Found in a finished corpus: 2,036 postings arrived through discovery
+    carrying none of the ingest rules -- 1,483 published before the cutoff,
+    472 in families the product does not serve, every one with a null region.
+    The poll path had all three tests and the seed path had none.
+    """
+    monkeypatch.setattr(config, "posted_after", lambda: 1_786_320_000)
+    monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
+
+    def P(eid, title="Software Engineer", posted=None, loc="New York, NY"):
+        return Posting(
+            ats="ashby",
+            slug="acme",
+            external_id=eid,
+            title=title,
+            url=f"https://jobs.ashbyhq.com/acme/{eid}",
+            location=loc,
+            posted_at=posted,
+        )
+
+    jobs.seed(
+        conn,
+        [
+            P("keep", posted=1_790_000_000),
+            P("old", posted=1_600_000_000),
+            P("retail", title="Store Associate", posted=1_790_000_000),
+            P("elsewhere", posted=1_790_000_000, loc="Bengaluru, India"),
+        ],
+        source="simplify",
+    )
+    kept = {r["external_id"] for r in conn.execute("SELECT external_id FROM jobs")}
+    assert kept == {"keep"}
+
+
+def test_a_seeded_row_carries_its_region(conn):
+    """Seeded rows had a null region because _row never computed one, so 1,741
+    of them were invisible to every region filter on the dashboard."""
+    jobs.seed(
+        conn,
+        [
+            Posting(
+                ats="ashby",
+                slug="acme",
+                external_id="1",
+                title="Software Engineer",
+                url="https://jobs.ashbyhq.com/acme/1",
+                location="Berlin, Germany",
+                posted_at=1_790_000_000,
+            )
+        ],
+        source="simplify",
+    )
+    assert conn.execute("SELECT region FROM jobs").fetchone()["region"] == "europe"

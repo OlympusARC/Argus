@@ -10,7 +10,8 @@ import sqlite3
 import time
 from collections.abc import Iterable
 
-from ..classify import classify
+from ..classify import classify, geo
+from ..core import config
 from ..core.models import Posting
 
 
@@ -52,15 +53,37 @@ def _row(p: Posting, ts: int, source: str) -> tuple:
         int(role.is_fde),
         role.seniority,
         role.ruleset,
+        geo.region(p.location),
     )
+
+
+def keep(ats: str, p: Posting, role, cutoff: int) -> bool:
+    """Whether a posting is worth storing at all.
+
+    One predicate for both write paths. The poll path had these three tests
+    and the seed path had none, so 2,036 postings arrived through discovery
+    carrying none of them: 1,483 published before the cutoff, 472 in families
+    the product does not serve, and every one of them with a null region.
+    A filter that guards one door is not a filter.
+
+    Order matters only for the age test, which must see a bound before
+    anything is stamped with a fallback date -- see feed/diff.
+    """
+    if config.STORE_ONLY_TECHNICAL and role.family not in config.STORE_FAMILIES:
+        return False
+    if not geo.in_target(p.location):
+        return False
+    newest = p.posted_at or p.posted_bound
+    return not (cutoff and newest and newest < cutoff)
 
 
 INSERT = """
 INSERT INTO jobs (ats, slug, external_id, title, location, locations_json,
                   url, posted_at,
                   first_seen_at, last_seen_at, content_hash, source,
-                  role_family, is_engineering, is_fde, seniority, classified_by)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  role_family, is_engineering, is_fde, seniority, classified_by,
+                  region)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 """
@@ -79,7 +102,12 @@ def seed(conn: sqlite3.Connection, postings: Iterable[Posting], source: str) -> 
     or it would keep a dead posting alive forever.
     """
     ts = now()
-    rows = [_row(p, ts, source) for p in postings]
+    cutoff = config.posted_after()
+    rows = [
+        _row(p, ts, source)
+        for p in postings
+        if keep(p.ats, p, classify(p.title, p.department), cutoff)
+    ]
     if not rows:
         return 0
 
