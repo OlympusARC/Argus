@@ -256,7 +256,20 @@ def _stage(conn, fetched: dict[Key, list[Posting]]) -> None:
     cutoff that moved mid-batch would accept and reject identical postings.
     """
     cutoff = config.posted_after()
-    cutoff_ts = jobs_mod.now()
+    """
+    The fallback date, truncated to the day.
+
+    A per-second value encodes poll order, and poll order then becomes a sort
+    key: every undated posting on one board shares one second, the next board
+    gets the next second, and "newest first" silently means "polled last
+    first". Page one of the dashboard was fifteen roles at one company.
+
+    A day is the resolution the source actually supports -- it told us
+    nothing, and the honest reading is "we saw this today". Ties are then
+    genuine ties, and the query breaks them on content_hash, which
+    interleaves companies.
+    """
+    cutoff_ts = jobs_mod.now() // 86400 * 86400
     for (ats, slug), postings in fetched.items():
         for p in postings:
             role = classify(p.title, p.department)

@@ -72,14 +72,17 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
       <Table className="table-fixed">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[44%]">
+            <TableHead className="w-[36%]">
               <SortHeader column="title">Role</SortHeader>
             </TableHead>
             <TableHead className="w-[14%]">
               <SortHeader column="company">Company</SortHeader>
             </TableHead>
-            <TableHead className="w-[16%]">Location</TableHead>
+            <TableHead className="w-[15%]">Location</TableHead>
             <TableHead className="w-[8%]">Type</TableHead>
+            <TableHead className="w-[9%]">
+              <SortHeader column="source">Source</SortHeader>
+            </TableHead>
             <TableHead className="w-[11%] text-right">
               <SortHeader column="posted" align="right">
                 Posted
@@ -130,6 +133,9 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                     {j.role_family}
                   </Badge>
                 )}
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground/80">
+                {j.ats}
               </TableCell>
               <TableCell className="text-right text-xs tabular-nums">
                 {posted(j.posted_at) ?? (

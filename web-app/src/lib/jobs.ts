@@ -87,10 +87,16 @@ export async function listJobs(f: Filters): Promise<{ jobs: Job[]; hasMore: bool
    * name is part of the statement rather than a value, so it cannot be
    * parameterised -- the allowlist is the whole defence.
    *
-   * NULLS LAST in both directions on purpose: 55,172 open roles have no
-   * posted date because Workday and BambooHR publish none, and sorting
-   * ascending should not open with 55,172 blanks. The secondary key keeps
-   * the order stable across pages when the primary ties.
+   * NULLS LAST in both directions on purpose: sorting ascending should not
+   * open with every undated posting.
+   *
+   * The tiebreak is content_hash, which is effectively random and unique per
+   * posting. It matters because ties are the common case, not the exception:
+   * 7,600 postings share the newest date, across 2,345 boards. Breaking them
+   * by first_seen_at grouped a board's whole batch together, so page one was
+   * fifteen roles at one company -- ING 342 rows in the top 50, Techtronic
+   * 289. A hash interleaves them and is still deterministic, so pagination
+   * stays stable.
    */
   const { key, desc } = parseSort(f.sort, f.dir);
   const column = SORTS[key];
@@ -109,7 +115,7 @@ export async function listJobs(f: Filters): Promise<{ jobs: Job[]; hasMore: bool
        LEFT JOIN boards b ON b.ats = j.ats AND b.slug = j.slug
        LEFT JOIN companies c ON c.id = b.company_id
       WHERE ${sql}
-      ORDER BY ${column} ${direction} NULLS LAST, j.first_seen_at DESC
+      ORDER BY ${column} ${direction} NULLS LAST, j.content_hash
       LIMIT $${args.length + 1} OFFSET $${args.length + 2}`,
     [...args, PAGE_SIZE + 1, page * PAGE_SIZE],
   );

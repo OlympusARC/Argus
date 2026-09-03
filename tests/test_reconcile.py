@@ -563,7 +563,7 @@ def test_a_bound_is_enough_to_reject_but_never_to_store(conn, monkeypatch):
     assert "old" not in rows, "the bound rejected it"
     assert "new" in rows, "the bound could not reject it, so it is kept"
     assert rows["new"] != cutoff + 86_400, "the bound itself was never stored"
-    assert abs(rows["new"] - jobs.now()) < 60, "it took the run time instead"
+    assert rows["new"] == jobs.now() // 86400 * 86400, "it took today instead"
 
 
 def test_a_bound_does_not_make_a_posting_look_edited():
@@ -645,7 +645,7 @@ def test_a_source_correcting_a_date_still_wins(conn, monkeypatch):
     assert conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"] == 1_787_000_000
 
 
-def test_a_posting_the_source_will_not_date_gets_the_run_time(conn, monkeypatch):
+def test_a_posting_the_source_will_not_date_gets_todays_date(conn, monkeypatch):
     """Every source, not a nominated few. A Posted column blank for some rows
     and filled for others reads as a bug rather than as an absence, and the
     most defensible thing known about an undated posting is when it turned
@@ -671,7 +671,7 @@ def test_a_posting_the_source_will_not_date_gets_the_run_time(conn, monkeypatch)
         },
     )
     got = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
-    assert got is not None and abs(got - jobs.now()) < 60, "the moment we saw it"
+    assert got == jobs.now() // 86400 * 86400, "today, at day resolution"
 
 
 def test_the_stand_in_date_is_written_once_not_refreshed(conn, monkeypatch):
@@ -712,7 +712,7 @@ def test_every_source_gets_the_fallback_not_just_one(conn, monkeypatch):
     monkeypatch.setattr(config, "posted_after", lambda: 0)
     diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
     got = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
-    assert got is not None and abs(got - jobs.now()) < 60
+    assert got == jobs.now() // 86400 * 86400
 
 
 def test_a_bounded_posting_is_rejected_before_it_can_be_stamped(conn, monkeypatch):
@@ -785,3 +785,46 @@ def test_a_seeded_row_carries_its_region(conn):
         source="simplify",
     )
     assert conn.execute("SELECT region FROM jobs").fetchone()["region"] == "europe"
+
+
+def test_the_fallback_date_does_not_encode_poll_order(conn, monkeypatch):
+    """A per-second fallback made poll order into a sort key: every undated
+    posting on one board shared one second, the next board got the next
+    second, and "newest first" silently meant "polled last first". Page one
+    of the dashboard was fifteen roles at one company.
+
+    A day is the resolution the source actually supports -- it told us
+    nothing, and the honest reading is "we saw this today"."""
+    import time as _t
+
+    from argus.feed import diff
+
+    monkeypatch.setattr(config, "posted_after", lambda: 0)
+    diff.run_batch(conn, {("ashby", "acme"): [post("1", posted_at=None)]})
+    first = conn.execute("SELECT posted_at FROM jobs").fetchone()["posted_at"]
+
+    """
+    A later batch, a later second -- and the same stored date.
+    """
+    monkeypatch.setattr(jobs, "now", lambda: int(_t.time()) + 90)
+    conn.execute("""INSERT INTO boards (ats, slug, status, tier, first_seen_at)
+                    VALUES ('lever','other','active',1,0)""")
+    diff.run_batch(
+        conn,
+        {
+            ("lever", "other"): [
+                Posting(
+                    ats="lever",
+                    slug="other",
+                    external_id="9",
+                    title="Engineer",
+                    url="https://x/9",
+                )
+            ]
+        },
+    )
+    second = conn.execute("SELECT posted_at FROM jobs WHERE ats='lever'").fetchone()[
+        "posted_at"
+    ]
+    assert first == second, "two batches 90 seconds apart share one date"
+    assert first % 86400 == 0, "and it is a day boundary"

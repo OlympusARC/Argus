@@ -86,6 +86,7 @@ export type Filters = {
  */
 export const SORTS = {
   posted: "j.posted_at",
+  source: "j.ats",
   seen: "j.first_seen_at",
   title: "j.title",
   company: "c.name",

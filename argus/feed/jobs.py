@@ -43,7 +43,7 @@ def _row(p: Posting, ts: int, source: str) -> tuple:
         p.url,
         # The same fallback the poll path applies: a posting nobody will date
         # takes the moment we saw it, so the column is never selectively empty.
-        p.posted_at if p.posted_at is not None else ts,
+        p.posted_at if p.posted_at is not None else (ts // 86400 * 86400),
         ts,
         ts,
         p.content_hash(),
@@ -102,6 +102,11 @@ def seed(conn: sqlite3.Connection, postings: Iterable[Posting], source: str) -> 
     or it would keep a dead posting alive forever.
     """
     ts = now()
+    """
+    Day resolution, as in feed/diff: a per-second fallback makes poll order
+    into a sort key.
+    """
+    day = ts // 86400 * 86400
     cutoff = config.posted_after()
     rows = [
         _row(p, ts, source)
