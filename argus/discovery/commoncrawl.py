@@ -27,6 +27,7 @@ returns 2 pages as a domain match and 0 as a prefix match.
 from __future__ import annotations
 
 import json
+import sys
 import time
 from collections.abc import Iterator
 
@@ -97,10 +98,29 @@ class CommonCrawlSource(Source):
         return int(info.get("pages", 0)) if isinstance(info, dict) else 0
 
     def discover(self) -> Iterator[BoardRef]:
+        """
+        Progress is printed per host, not only at the end.
+
+        This is the slowest source by an order of magnitude -- measured at
+        3,057 seconds against 88 for the next worst -- and it used to print
+        nothing at all while it ran. Fifty-one silent minutes in CI is
+        indistinguishable from a hung job, and was reported as one.
+        """
         seen: set[tuple[str, str]] = set()
-        for crawl in self._recent_crawls():
+        crawls = self._recent_crawls()
+        t0 = time.time()
+        done = 0
+        total = len(crawls) * len(self.hosts)
+        for crawl in crawls:
             for host in self.hosts:
                 pages = self._pages(crawl, host)
+                done += 1
+                print(
+                    f"commoncrawl     {done}/{total}  {host}  {crawl}  "
+                    f"{pages} pages  {len(seen):,} refs  {time.time() - t0:.0f}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 time.sleep(self.pause)
                 for page in range(pages):
                     lines = self._get(
