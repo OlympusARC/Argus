@@ -34,8 +34,8 @@ against what was stored last time. Anything that changed becomes an event — a 
 it is what lets you see a role the hour it appears, instead of whenever an aggregator
 catches up.
 
-**4. Keep the list clean.** A ruleset labels every job by kind (engineering, product,
-security…), seniority and region, and anything outside the target is dropped *before* it
+**4. Keep the list clean.** A ruleset labels every job by kind (engineering, AI,
+data…), seniority and region, and anything outside the target is dropped *before* it
 is stored rather than filtered out later at display time.
 
 Once a day a separate process looks at the state of the whole system and decides what
@@ -162,7 +162,7 @@ disappearance looks like an outage rather than a hiring freeze.
 
 Filtering happens **before storage**, not at query time. Three axes:
 
-- **Family** — `engineering`, `fde`, `ai`, `data`, `security`, `product`
+- **Family** — `engineering`, `fde`, `ai`, `data`
 - **Region** — `us`, `europe`, `remote`, `unknown`; anything resolving to `other` is rejected
 - **Age** — a fixed cutoff timestamp; anything older is not stored
 
@@ -423,7 +423,7 @@ All configuration is environment variables. None is required for a SQLite run.
 | variable | default | purpose |
 |---|---|---|
 | `ARGUS_STORE_ONLY_TECHNICAL` | `1` | restrict to technical families |
-| `ARGUS_STORE_FAMILIES` | `engineering,fde,ai,data,security,product` | which families to keep |
+| `ARGUS_STORE_FAMILIES` | `engineering,fde,ai,data` | which families to keep |
 | `ARGUS_STORE_REGIONS` | `us,europe,remote,unknown` | which regions to keep |
 | `ARGUS_STORE_POSTED_AFTER` | fixed timestamp | reject postings older than this |
 

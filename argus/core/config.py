@@ -126,11 +126,12 @@ of the classifier: product management at a software company is a tech job by
 most readings, and the flag that answers "is this engineering work" cannot
 also answer "is this worth storing".
 
-design is the deliberate omission -- add "design" here if that changes.
+design, security and product are the deliberate omissions. Note the
+classifier still labels all three: the rules stay, so an Application
+Security Engineer is recognised as security and dropped, rather than
+falling through to ENGINEERING and being stored as one.
 """
-STORE_FAMILIES = set(
-    os.getenv("ARGUS_STORE_FAMILIES", "engineering,fde,ai,data,security,product").split(",")
-)
+STORE_FAMILIES = set(os.getenv("ARGUS_STORE_FAMILIES", "engineering,fde,ai,data").split(","))
 
 """
 Which regions are worth keeping, by the same argument as STORE_FAMILIES.

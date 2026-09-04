@@ -345,17 +345,19 @@ def test_only_the_named_families_are_stored(conn, monkeypatch):
             post("e", title="Product Manager"),
             post("f", title="Senior Product Designer"),
             post("g", title="Registered Nurse"),
+            post("h", title="Application Security Engineer"),
         ],
     )
     stored = [r["title"] for r in conn.execute("SELECT title FROM jobs ORDER BY external_id")]
-    assert stored == ["Senior Backend Engineer", "Machine Learning Engineer", "Product Manager"]
-    assert res.new == 3
+    assert stored == ["Senior Backend Engineer", "Machine Learning Engineer"]
+    assert res.new == 2
 
 
 def test_the_stored_set_is_configuration_not_a_property_of_the_classifier(conn, monkeypatch):
-    """Product management at a software company is a tech job by most
-    readings, and is_engineering cannot answer that -- it answers whether
-    something is engineering work. The boundary is a separate decision."""
+    """Which families are worth keeping is a decision that changes -- product
+    and security were stored and now are not -- and is_engineering cannot
+    express it, because it answers whether something is engineering work.
+    Setting an entirely different set here is the point."""
     monkeypatch.setattr(config, "STORE_ONLY_TECHNICAL", True)
     monkeypatch.setattr(config, "STORE_FAMILIES", {"engineering", "design"})
     reconcile.apply_board(
@@ -828,3 +830,15 @@ def test_the_fallback_date_does_not_encode_poll_order(conn, monkeypatch):
     ]
     assert first == second, "two batches 90 seconds apart share one date"
     assert first % 86400 == 0, "and it is a day boundary"
+
+
+def test_security_and_product_are_classified_but_not_stored():
+    """The classifier still labels them, deliberately. Deleting the rules
+    instead would send an Application Security Engineer through to
+    ENGINEERING, which stores the thing the exclusion was meant to remove."""
+    from argus.classify import classify
+
+    assert classify("Application Security Engineer").family == "security"
+    assert classify("Product Manager").family == "product"
+    assert "security" not in config.STORE_FAMILIES
+    assert "product" not in config.STORE_FAMILIES

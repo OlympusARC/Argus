@@ -35,8 +35,6 @@ const TYPE_TONE: Record<string, string> = {
   fde: "text-violet-300 bg-violet-400/10 border-violet-400/20",
   ai: "text-teal-300 bg-teal-400/10 border-teal-400/20",
   data: "text-amber-300 bg-amber-400/10 border-amber-400/20",
-  security: "text-rose-300 bg-rose-400/10 border-rose-400/20",
-  product: "text-emerald-300 bg-emerald-400/10 border-emerald-400/20",
 };
 
 function ago(ts: number | null) {
@@ -89,7 +87,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
       <div className="rounded-lg border border-dashed py-16 text-center">
         <p className="text-sm font-medium">No roles match these filters</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Try clearing one — the corpus only stores engineering, product and adjacent types.
+          Try clearing one — the corpus only stores engineering, AI, data and FDE roles.
         </p>
       </div>
     );

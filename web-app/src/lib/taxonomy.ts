@@ -6,7 +6,7 @@
  * the build failed with a wall of module-not-found. Constants that both sides
  * need belong in a module that imports nothing.
  */
-export const FAMILIES = ["engineering", "fde", "ai", "data", "security", "product"] as const;
+export const FAMILIES = ["engineering", "fde", "ai", "data"] as const;
 
 export const SENIORITIES = [
   "intern",
