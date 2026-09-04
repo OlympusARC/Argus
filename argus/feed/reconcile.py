@@ -154,6 +154,7 @@ def run(
     workers: int | None = None,
     force: bool = False,
     progress_every: int = 250,
+    progress_seconds: float = 30.0,
     batch: int = 100,
 ) -> RunSummary:
     adapter = adapters.get(ats)
@@ -182,6 +183,14 @@ def run(
     started = int(time.time())
     run_id = db.insert_id(conn, "INSERT INTO poll_runs (started_at) VALUES (?)", (started,))
     t0 = time.time()
+    """
+    Progress is reported on boards *or* elapsed time, whichever comes first.
+    A count alone makes the slowest ATS the quietest: workday is capped at
+    400 boards but paginates at 20 postings a request over ~183 postings a
+    board, so at one line per 250 boards it printed twice in fifteen minutes
+    and looked hung.
+    """
+    last_report = [t0]
 
     """
     Fetches run concurrently; every database write happens here on the main
@@ -240,7 +249,10 @@ def run(
                 pending_postings += len(postings)
                 if len(pending) >= batch or pending_postings >= config.BATCH_POSTINGS:
                     flush()
-            if progress_every and summary.boards % progress_every == 0:
+            due_by_count = progress_every and summary.boards % progress_every == 0
+            due_by_time = progress_seconds and time.time() - last_report[0] >= progress_seconds
+            if progress_every and (due_by_count or due_by_time):
+                last_report[0] = time.time()
                 rate = summary.boards / max(time.time() - t0, 1e-9)
                 """
                 An ETA rather than only a rate: the useful question during a
