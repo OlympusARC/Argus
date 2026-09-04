@@ -80,7 +80,15 @@ jobs:
           # responses from Workday. The limit bounds one run rather than the
           # backlog -- boards are polled most-overdue first and next_poll_at
           # persists, so what does not fit here is simply the next run's work.
-          argus poll --ats workday --workers 6 --limit 400 &
+          #
+          # 1,500 rather than 400. The cap was 400 when this ran last in a
+          # shared window and would otherwise have starved the other seven.
+          # Running concurrently, Workday has the step to itself, and 400
+          # against 4,495 live boards meant a full cycle took eleven runs --
+          # so with a two-poll close grace, a filled Workday job stayed on the
+          # dashboard for twenty-two hours. Measured at 0.44 boards a second,
+          # 1,500 is ~57 minutes inside a 72-minute step, and cycles in three.
+          argus poll --ats workday --workers 6 --limit 1500 &
           pids+=("$!")
 
           # Wait on each rather than a bare `wait`, so one ATS failing is
