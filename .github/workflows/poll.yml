@@ -1,13 +1,18 @@
 name: poll
 
-# The reconcile, every two hours. This is what produces new-job events.
+# The reconcile, hourly. This is what produces new-job events.
 #
-# A full sweep of the registry takes ~50 minutes, so hourly leaves ten minutes
-# of headroom and two-hourly leaves seventy. The alternative was demoting quiet
-# boards to a longer tier, which shrinks the sweep but makes freshness uneven --
-# a board silent for a fortnight that then posts something good is exactly the
-# case worth catching promptly. Uniform two-hourly gives a worse best case and a
-# much better worst case, and needs no heuristic about which boards matter.
+# Two-hourly was chosen when a full sweep took ~50 minutes and left only ten
+# minutes of headroom. Polling the ATSs concurrently cut that to 8-17, so the
+# constraint is gone and the cadence can match TIER_INTERVALS[1], which has
+# said 3600 all along: at two-hourly every board was already an hour overdue
+# when it was fetched.
+#
+# Freshness is half the interval plus GitHub's scheduling delay. Two-hourly
+# was ~60 + ~10 minutes; hourly is ~30 + ~10. The delay is real -- GitHub does
+# not promise punctual cron -- but at this interval it is a rounding error
+# rather than the dominant term, which is why an external scheduler is not
+# worth the third-party dependency on the one job that must not fail.
 #
 # One runner *per ATS*, and the ATSs run concurrently.
 #
@@ -21,7 +26,7 @@ name: poll
 # Measured on three ATSs at 300 boards: 284s serial against 180s parallel.
 on:
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 concurrency:
