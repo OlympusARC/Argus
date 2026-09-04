@@ -558,8 +558,78 @@ def test_llm_the_degree_is_not_llm_the_model():
     assert classify("LLM Inference Engineer").family == "ai"
 
 
-def test_r3_only_ever_removes():
+def test_r4_only_ever_removes():
     """Measured over the whole corpus: 15,720 postings changed family and
     every one moved to `other`. A ruleset that also promoted rows would need
     a different argument -- this one is a noise fix."""
-    assert RULESET == "r3"
+    assert RULESET == "r4"
+
+
+"""
+r4: the discipline no longer has to sit beside "engineer".
+
+Each shape below is a real title from the corpus that r3 admitted. They are
+grouped by *why* r3 missed them, because the fix is one pattern and a
+regression in any shape would look like a regression in all four.
+"""
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # a separator between two disciplines
+        "Entry-Level Civil/Highway Engineer - Hiring Event with AECOM",
+        "Junior Geotechnical / Tailings Engineer, Minerals & Metals",
+        # the discipline follows the noun instead of preceding it
+        "Entry-Level Engineer - Water - Hiring Event with AECOM",
+        "Engineer I, Environment & Sustainability",
+        "Senior Engineer - Controls",
+        "Engineer,Quality",
+        # a word in between
+        "Electronics Design Engineer I",
+        "Antenna Electrical Design Engineer Intern (Summer 2027)",
+        "Staff Electronics Design Engineer - Zonal ECU",
+        # disciplines r3 simply did not list
+        "Harness Design Engineer I/II",
+        "Senior Traffic Operations Engineer",
+        "WATER RESOURCES ENGINEER II",
+        "Structural Analysis Engineer",
+        "Senior Industrial Energy Engineer",
+        "Principal RF Engineer",
+        "AGGP2027 - Graduate Stress Engineer I",
+    ],
+)
+def test_a_discipline_away_from_the_noun_is_still_excluded(title):
+    assert classify(title).family == "other", title
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # an explicit software signal always beats a discipline word
+        "Manufacturing Systems Software Engineer",
+        "Firmware Engineer - Electrical Systems",
+        "Software Engineer, New Grad",
+        "Backend Engineer Intern",
+        "Test Automation Engineer",
+        "Quality Engineer, SDET",
+        # "control plane" is a software term; `controls?` is on the
+        # discipline list for industrial controls, and matched it
+        "Platform Engineer - Infrastructure Control Plane & Workflow Automation",
+        "Data Platform Engineer, Manufacturing Analytics",
+        "Site Reliability Engineer, Production Systems",
+    ],
+)
+def test_a_software_signal_still_beats_the_widened_rule(title):
+    assert classify(title).is_engineering, title
+
+
+def test_the_gap_is_bounded_so_a_long_title_does_not_join_two_halves():
+    """`.*` between discipline and noun would let any title holding both a
+    discipline anywhere and an unrelated "engineer" anywhere match."""
+    t = (
+        "Safety Coordinator for the Northwest Region, reporting to the plant "
+        "director, supporting our teams across sites - see also our separate "
+        "listing for a Backend Engineer on the platform team"
+    )
+    assert classify(t).is_engineering, "the gap must not span the whole title"

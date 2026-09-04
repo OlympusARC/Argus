@@ -22,7 +22,7 @@ from dataclasses import dataclass
 Bump on any change to the patterns below. Rows carry this, so a sweep can
 find exactly what is stale.
 """
-RULESET = "r3"
+RULESET = "r4"
 
 """
 Hard exclusions come first. The corpus is dominated by Workday enterprise
@@ -44,7 +44,18 @@ SOFTWARE_SIGNAL = re.compile(
     # usually a factory job and "Validation Engineer" usually a lab one, but
     # SDET, QA and firmware versions of both are ours.
     r"qa|sdet|test[\s-]?automation|robotics?|site[\s-]?reliability|"
-    r"server[\s-]?(engineer|administrator|side))\b"
+    r"server[\s-]?(engineer|administrator|side)|"
+    # More rescues, each from a title the discipline list wrongly claimed.
+    # "control plane" is the one that bit: `controls?` is on that list for
+    # industrial controls, and it matched a platform-infrastructure role.
+    r"control[\s-]?plane|platform[\s-]engineer|infrastructure[\s-]engineer|"
+    # `web` and `mobile` are qualified: bare, they rescued "Mobile Associate
+    # - Retail Sales" out of NOT_TECHNICAL, which is a phone shop.
+    r"web[\s-]?(developer|engineer|dev)|mobile[\s-]?(developer|engineer|app)|"
+    r"ios|android|linux|unix|docker|aws|azure|gcp|terraform|"
+    r"micro[\s-]?services?|distributed[\s-]systems?|compiler|observability|"
+    r"react|node\.?js|rust|ruby|perl|etl|"
+    r"data[\s-](platform|pipeline))\b"
     r"|\b(c\+\+|c#|\.net)",
     re.I,
 )
@@ -80,19 +91,53 @@ is not. The qualifiers left out are as considered as the ones in: `design`
 splits evenly between mechanical and product work, and `reliability` would
 have taken Site Reliability Engineer with it.
 """
-NON_SOFTWARE_ENG = re.compile(
-    r"\b(mechanical|electrical|electro[\s-]?mechanical|electronics?|"
+"""
+Disciplines that are engineering but not ours.
+
+The discipline word is deliberately *not* anchored beside "engineer".
+Measured against the corpus, requiring adjacency missed four shapes at
+once: "Civil/Highway Engineer" (a slash), "Engineer - Water" (reversed),
+"Electronics Design Engineer" (a word in between) and titles whose
+discipline was simply absent from the list. Anchoring caught 13 of 34,217
+open engineering roles; allowing a bounded gap in either direction catches
+2,683.
+
+Broadening is only safe because of the guard at the call site: an
+exclusion never beats an explicit SOFTWARE_SIGNAL, so "Manufacturing
+Systems Software Engineer" survives being full of discipline words.
+"""
+_DISCIPLINE = (
+    r"mechanical|electrical|electro[\s-]?mechanical|electronics?|"
     r"civil|structural|chemical|industrial|manufacturing|process|"
     r"aerospace|aeronautical|astronautical|biomedical|bio[\s-]?medical|"
-    r"petroleum|mining|geological|geotechnical|environmental|nuclear|"
-    r"agricultural|marine|automotive|materials|metallurg\w*|"
+    r"petroleum|mining|geological|geotechnical|environmental|environment|"
+    r"nuclear|agricultural|marine|automotive|materials|metallurg\w*|"
     r"welding|packaging|corrosion|drilling|reservoir|thermal|"
-    r"optical|acoustic|propulsion|hydraulic|pneumatic|"
+    r"optical|optics|acoustic|propulsion|hydraulic|pneumatic|"
     r"fire[\s-]?protection|architectural|continuous[\s-]?improvement|"
     r"facilities|maintenance|equipment|production|safety|quality|"
     r"project|controls?|validation|calibration|metrology|supplier|"
-    r"service|plant|tooling|molding|moulding|textile|water|wastewater)"
-    r"[\s-]+engineer\w*\b",
+    r"service|plant|tooling|molding|moulding|textile|water|wastewater|"
+    r"highway|traffic|transportation|survey|hvac|piping|"
+    r"harness|vehicle|chassis|powertrain|battery|stress|fatigue|"
+    r"avionics|payload|mission[\s-]?operations|ground[\s-]?support|"
+    r"semiconductor|photonics|antenna|rf|wafer|fab|"
+    r"sustainability|utilities|energy|mep|geomatics|"
+    r"transmission|distribution|substation|construction|"
+    r"spacecraft|gnc|guidance|launch[\s-]?operations|flight[\s-]?test|"
+    # Unqualified "Design Engineer" is a hardware role in every
+    # sampled case -- mechanical, electrical, ASIC, FPGA, payloads.
+    # The software ones say so and are rescued by SOFTWARE_SIGNAL.
+    r"design"
+)
+
+"""
+Bounded gaps rather than `.*`: a long title can hold both a discipline and
+an unrelated "engineer", and an unbounded match would join them.
+"""
+NON_SOFTWARE_ENG = re.compile(
+    rf"\b({_DISCIPLINE})\b[\w\s/&,.'()–—·-]{{0,28}}\bengineer\w*\b"
+    rf"|\bengineer\w*\b[\w\s/&,.'()–—·-]{{0,20}}\b({_DISCIPLINE})\b",
     re.I,
 )
 
