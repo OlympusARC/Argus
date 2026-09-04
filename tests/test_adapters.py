@@ -206,3 +206,62 @@ def test_workday_bounds_what_it_cannot_date():
     """
     assert newest_possible("Posted 5 Days Ago", now) == now - 5 * 86_400
     assert newest_possible(None, now) is None
+
+
+"""
+BambooHR returns two location objects and the adapter used to read one.
+"""
+
+
+def test_bamboohr_reads_the_country_out_of_atsLocation():
+    """`location` has no country field at all, and on 749 of 2,235 open
+    postings its city and state are both null. budibase/49 reports
+    {"city": null, "state": null} beside {"country": "United Kingdom"}."""
+    from argus.adapters.bamboohr import _location
+
+    assert (
+        _location(
+            {
+                "location": {"city": None, "state": None},
+                "atsLocation": {"country": "United Kingdom", "city": None, "state": None},
+            }
+        )
+        == "United Kingdom"
+    )
+
+
+def test_bamboohr_prefers_the_populated_field_of_each_pair():
+    from argus.adapters.bamboohr import _location
+
+    assert (
+        _location(
+            {
+                "location": {"city": "Austin", "state": "Texas"},
+                "atsLocation": {"country": "United States", "city": "Ignored"},
+            }
+        )
+        == "Austin, Texas, United States"
+    )
+
+
+def test_bamboohr_falls_back_to_province_where_there_is_no_state():
+    """Canadian postings use province, and reading it is what lets them be
+    refused rather than stored as an unknown region."""
+    from argus.adapters.bamboohr import _location
+
+    assert (
+        _location(
+            {
+                "location": {},
+                "atsLocation": {"city": "Toronto", "province": "Ontario", "country": "Canada"},
+            }
+        )
+        == "Toronto, Ontario, Canada"
+    )
+
+
+def test_bamboohr_with_neither_object_has_no_location():
+    from argus.adapters.bamboohr import _location
+
+    assert _location({}) is None
+    assert _location({"location": {}, "atsLocation": {}}) is None
