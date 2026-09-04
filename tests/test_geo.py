@@ -246,3 +246,24 @@ def test_the_leftmost_component_decides_not_the_longest(location, want):
     Leftmost is where the specific component goes: the town names the place,
     what follows it names the region."""
     assert geo.region(location) == want, location
+
+
+@pytest.mark.parametrize(
+    "location,want",
+    [
+        ("Waterloo Ontario", "other"),
+        ("Richmond, British Columbia", "other"),
+        ("Bedford, Nova Scotia", "other"),
+        ("Remote - Ontario", "other"),
+        # ...but the US markers are tried first, because both of these are American
+        ("Ontario, California", "us"),
+        ("New Brunswick   NJ   US", "us"),
+        ("New Brunswick, NJ", "us"),
+    ],
+)
+def test_a_canadian_province_is_refused_unless_the_us_says_otherwise(location, want):
+    """62 postings sat in `us` naming Ontario. GeoNames disagrees because
+    Ontario, California is a city of 175,000 and the province is not a city
+    at all, so the province has to be matched by name -- but after the US
+    markers, since Ontario, California and New Brunswick, NJ are real."""
+    assert geo.region(location) == want, location

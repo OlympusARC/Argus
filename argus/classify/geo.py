@@ -145,6 +145,17 @@ US_SHORTHAND = re.compile(
     re.I,
 )
 
+"""
+Provinces rather than cities: the Canadian cities are already in
+NON_TARGET_CITY, and it is the province that a posting appends.
+"""
+CA_PROVINCE = re.compile(
+    r"\b(ontario|quebec|québec|british columbia|alberta|manitoba|saskatchewan|"
+    r"nova scotia|new brunswick|newfoundland|labrador|prince edward island|"
+    r"yukon|nunavut|northwest territories)\b",
+    re.I,
+)
+
 EU_COUNTRY = re.compile(
     r"\b(united kingdom|england|scotland|wales|northern ireland|great britain|"
     r"u\.?k\.?|ireland|france|germany|deutschland|spain|españa|portugal|italy|"
@@ -292,6 +303,16 @@ def region(location: str | None) -> str:
         return hit
     if US_STATE_ABBR.search(text) or US_SHORTHAND.search(text):
         return US
+    """
+    Canadian provinces, checked here rather than with the other non-target
+    names at the top. "Ontario, California" and "New Brunswick, NJ, US" are
+    both American, so the US markers have to be tried first -- but with none
+    of them present, "Waterloo Ontario" is Canada, and GeoNames disagrees
+    because Ontario, California is a city of 175,000 and the province is not
+    a city at all.
+    """
+    if CA_PROVINCE.search(text):
+        return OTHER
     if US_CITY.search(text):
         return US
     if EU_CITY.search(text):
