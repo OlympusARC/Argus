@@ -35,11 +35,20 @@ from ..core import config, http
 WATERMARK_KEY = "discord"
 
 """
-Both are worth naming rather than inlining: the first is the only thing
-standing between a backfill and a thousand messages, and the second decides
-how long a job stays "already announced" once a board starts flapping.
+The flood guard no longer stands between a backfill and a thousand embeds
+-- the character budget in render() does that, trimming to whatever fits in
+6000 characters however many rows arrive. What it does now is narrower and
+still worth having: it says "this is a catch-up, not today's news", because
+a reader who opens a digest of 900 roles has been handed an archive and
+should be told so rather than shown fifteen of them.
+
+So the number is sized to the filtered feed rather than the old unfiltered
+one. Measured: 1,108 new-grad and intern roles in the US or remote appeared
+in 24 hours, so a two-hourly run normally sees around 90. 200 fired on a
+run of 208, which was an ordinary catch-up after a missed poll. 600 leaves
+three normal runs of headroom and still catches a genuine backfill.
 """
-FLOOD_THRESHOLD = int(os.getenv("ARGUS_NOTIFY_FLOOD", "200"))
+FLOOD_THRESHOLD = int(os.getenv("ARGUS_NOTIFY_FLOOD", "600"))
 DEDUPE_WINDOW = int(os.getenv("ARGUS_NOTIFY_DEDUPE_DAYS", "30")) * 86400
 
 """
@@ -243,13 +252,19 @@ def render(d: Digest) -> dict | None:
     posts nothing rather than an hourly "no new jobs".
     """
     if d.flooded:
+        """
+        Name the filter, not "engineering roles". The digest is two groups in
+        two regions, and a summary that describes itself as something broader
+        sends the reader looking for postings it was never going to carry.
+        """
+        groups = " and ".join(label.lower() for label, _, _ in GROUPS)
         return {
             "content": (
-                f"**{d.pending:,} new engineering roles** since the last digest "
-                f"(events {d.from_id + 1}–{d.to_id}).\n"
-                f"That is past the {FLOOD_THRESHOLD} flood threshold, so this is a "
-                f"summary rather than {d.pending:,} listings — "
-                f"`argus events --type new` to read them."
+                f"**{d.pending:,} new** \u2014 {groups}, US & remote, since the last "
+                f"digest (events {d.from_id + 1}\u2013{d.to_id}).\n"
+                f"That is past the {FLOOD_THRESHOLD:,} flood threshold, so this is "
+                f"a catch-up summary rather than {d.pending:,} listings \u2014 the "
+                f"dashboard has them all."
             )
         }
     groups = d.grouped()

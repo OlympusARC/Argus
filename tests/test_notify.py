@@ -174,7 +174,7 @@ def test_flood_guard_collapses_to_a_summary(conn, monkeypatch):
     assert d.flooded and d.sending == 0
     payload = notify.render(d)
     assert "embeds" not in payload
-    assert "5 new engineering roles" in payload["content"]
+    assert "5 new" in payload["content"]
 
 
 def test_a_failed_send_does_not_advance_the_watermark(conn, monkeypatch):
@@ -433,3 +433,25 @@ def test_the_query_filter_is_generated_from_the_groups(conn):
         for r in regions:
             assert f"'{r}'" in notify.SELECT_PENDING
     assert "__LEVELS__" not in notify.SELECT_PENDING
+
+
+def test_the_flood_summary_names_the_actual_filter(conn, monkeypatch):
+    """It said "engineering roles", which the digest no longer carries. A
+    summary that describes itself as something broader than it is sends the
+    reader looking for postings it was never going to hold."""
+    monkeypatch.setattr(notify, "FLOOD_THRESHOLD", 1)
+    for i in range(3):
+        add_job(conn, f"j{i}")
+        add_event(conn, f"j{i}")
+    notify.set_watermark(conn, 0)
+    content = notify.render(notify.build(conn))["content"]
+    assert "new grad" in content and "internship" in content
+    assert "US & remote" in content
+    assert "engineering roles" not in content
+
+
+def test_the_flood_threshold_clears_an_ordinary_catch_up(conn):
+    """Measured: 1,108 matching roles in 24h, so a two-hourly run sees ~90.
+    The old 200 fired on a run of 208, which was a missed poll rather than a
+    backfill."""
+    assert notify.FLOOD_THRESHOLD >= 500
