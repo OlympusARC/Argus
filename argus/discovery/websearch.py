@@ -12,9 +12,13 @@ one actually available:
   1. Monid -> TinyFish /search  (MONID_API_KEY) -- metered at $0 per call, so
      it costs nothing but a key. Preferred for that reason alone.
   2. Brave Search API           (BRAVE_API_KEY) -- free tier, needs a key.
-  3. DuckDuckGo HTML            (no key) -- verified dead 2026-08: answers 202
-     with an anti-bot page, so the source reports itself unavailable rather
-     than silently returning nothing.
+  3. DuckDuckGo HTML            (no key) -- free and useless. Re-measured
+     2026-09: it answers 200 with a real results page, no captcha and no
+     anti-bot notice, and returns *one* result for a query that gives
+     TinyFish ten. That one is a //duckduckgo.com/l/?uddg= redirect with the
+     target percent-encoded inside a query parameter, so extract_all cannot
+     see an ATS URL in it either. Kept only so the backend list is honest
+     about there being no keyless option that works.
 
 The premise above holds for keyword engines, which is what backends 2 and 3
 are: they index HTML as served, so a board is invisible and only the pages
@@ -182,9 +186,9 @@ class WebSearchSource(Source):
             self.backend = "brave"
             return True, ""
         """
-        DuckDuckGo's keyless HTML endpoint now answers 202 with an anti-bot
-        page for every request, so it yields nothing. Reporting unavailable
-        beats silently returning zero refs and looking like a dry vector.
+        DuckDuckGo answers, and answers with almost nothing -- see the note
+        at the top. Reporting unavailable beats silently returning zero refs
+        and looking like a dry vector.
         """
         self.backend = "ddg"
         return False, (
