@@ -226,3 +226,23 @@ def test_a_spelled_out_country_beats_a_two_letter_code():
     tried first and Spain never got a look."""
     assert geo.region("Tarragona, CT, Spain") == geo.EUROPE
     assert geo.region("Cambridge, MA, United States") == geo.US
+
+
+@pytest.mark.parametrize(
+    "location,want",
+    [
+        ("Woking, Surrey", "europe"),
+        ("Mississauga, Ontario", "other"),
+        ("Metzingen / Riederich", "europe"),
+        ("Washington - Pullman", "us"),
+    ],
+)
+def test_the_leftmost_component_decides_not_the_longest(location, want):
+    """ "Woking, Surrey" splits into two six-character fragments, so sorting
+    by length left the tie to be broken arbitrarily -- and it broke on Surrey,
+    which GeoNames holds as the one in British Columbia. Six English postings
+    were refused as Canadian.
+
+    Leftmost is where the specific component goes: the town names the place,
+    what follows it names the region."""
+    assert geo.region(location) == want, location

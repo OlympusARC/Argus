@@ -503,12 +503,26 @@ def _gazetteer_region(text: str) -> str | None:
     if not table:
         return None
     parts = [p.strip() for p in _SPLIT.split(text) if p and p.strip()]
-    for cand in sorted({*parts, text}, key=len, reverse=True):
+    """
+    The whole string first, then fragments left to right.
+
+    Not longest-first: "Woking, Surrey" splits into two six-character
+    fragments, and sorting by length left the tie to be broken arbitrarily.
+    It broke on Surrey, which GeoNames holds as the one in British Columbia,
+    so six English postings were refused as Canadian.
+
+    Leftmost wins because that is where the specific component goes --
+    "Woking, Surrey", "Mississauga, Ontario", "Metzingen / Riederich". The
+    town names the place; what follows it names the region.
+    """
+    for cand in [text, *parts]:
         hit = _lookup(table, cand)
         if hit:
             return hit
-    words = {w for p in parts for w in p.split() if len(w) >= _MIN_WORD}
-    for cand in sorted(words, key=len, reverse=True):
+    seen: list[str] = []
+    for part in parts:
+        seen.extend(w for w in part.split() if len(w) >= _MIN_WORD)
+    for cand in seen:
         hit = _lookup(table, cand)
         if hit and hit != OTHER:
             return hit
