@@ -32,3 +32,8 @@ prune_stale.py
 backfill_region.py
 purge_workable.py
 rebuild_feed.py
+# added by `vercel link`
+.vercel
+.env*
+# ...but the example carries no secrets and is the only way to know what to set
+!.env.example
