@@ -9,10 +9,16 @@ name: poll
 # case worth catching promptly. Uniform two-hourly gives a worse best case and a
 # much better worst case, and needs no heuristic about which boards matter.
 #
-# One runner, deliberately. http.host_slot caps per-host concurrency with an
-# in-process semaphore, so a second concurrent runner would silently double
-# every ATS's rate limit -- we already produced 709 HTTP 429s from Workday by
-# over-driving a single process.
+# One runner *per ATS*, and the ATSs run concurrently.
+#
+# http.host_slot caps per-host concurrency with an in-process semaphore, so
+# two pollers over the same ATS would silently double that host's rate limit
+# -- we already produced 709 HTTP 429s from Workday by over-driving a single
+# process. But no host is shared between ATSs (ashby is one host, bamboohr is
+# 111, and they are disjoint), so one process each respects every host's cap
+# while overlapping the waiting.
+#
+# Measured on three ATSs at 300 boards: 284s serial against 180s parallel.
 on:
   schedule:
     - cron: "0 */2 * * *"
@@ -59,20 +65,27 @@ jobs:
         timeout-minutes: 72
         continue-on-error: true
         run: |
-          # Cheap ATSs first, Workday last. Workday paginates at 20 postings
-          # per request and averages 183 per board, so it is an order of
-          # magnitude slower than the rest -- and polling it first meant it
-          # consumed the whole 50-minute window and the other eight never ran
-          # at all. Last, it simply takes whatever time is left.
+          pids=()
           for ats in ashby greenhouse lever smartrecruiters breezy recruitee bamboohr; do
-            argus poll --ats "$ats" --workers 10
+            argus poll --ats "$ats" --workers 10 &
+            pids+=("$!")
           done
 
           # Fewer workers than the others on purpose: 20 earned 709 rate-limit
           # responses from Workday. The limit bounds one run rather than the
           # backlog -- boards are polled most-overdue first and next_poll_at
           # persists, so what does not fit here is simply the next run's work.
-          argus poll --ats workday --workers 6 --limit 400
+          argus poll --ats workday --workers 6 --limit 400 &
+          pids+=("$!")
+
+          # Wait on each rather than a bare `wait`, so one ATS failing is
+          # reported as that ATS rather than as the whole step. The step is
+          # continue-on-error anyway: a failed sweep must not cost the digest.
+          failed=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || failed=$((failed + 1))
+          done
+          echo "reconcile finished; $failed of ${#pids[@]} ATS pollers exited non-zero"
       # if: always() so a cut-short reconcile still gets its rows labelled
       # and its digest posted.
       - name: Classify anything the ruleset has not seen
