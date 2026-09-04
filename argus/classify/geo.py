@@ -278,15 +278,20 @@ def region(location: str | None) -> str:
         return hit
     if NON_TARGET_COUNTRY.search(text) or NON_TARGET_CITY.search(text):
         return OTHER
-    if (
-        US_COUNTRY.search(text)
-        or US_STATE.search(text)
-        or US_STATE_ABBR.search(text)
-        or US_SHORTHAND.search(text)
-    ):
+    if US_COUNTRY.search(text) or US_STATE.search(text):
         return US
+    """
+    A spelled-out country beats a two-letter code. "Tarragona, CT, Spain" was
+    read as Connecticut because the abbreviation was tried first and Spain
+    never got a look.
+    """
     if EU_COUNTRY.search(text):
         return EUROPE
+    hit = _code_confirmed_by_city(text)
+    if hit:
+        return hit
+    if US_STATE_ABBR.search(text) or US_SHORTHAND.search(text):
+        return US
     if US_CITY.search(text):
         return US
     if EU_CITY.search(text):
@@ -413,14 +418,83 @@ called "Ord" -- and a wrong region is worse than none.
 """
 _SPLIT = re.compile(r"[,/|()\[\]]+|\s+-\s+|\u2013|\u2014")
 _MIN_WORD = 4
-_CODES = {"u": US, "e": EUROPE, "o": OTHER}
+"""
+The gazetteer stores an ISO country code rather than a region, so a lookup
+can answer two questions: where is this place, and does it agree with a
+two-letter code written beside it.
+"""
+_EUROPE_CC = frozenset(
+    {
+        "AL",
+        "AD",
+        "AT",
+        "BY",
+        "BE",
+        "BA",
+        "BG",
+        "HR",
+        "CY",
+        "CZ",
+        "DK",
+        "EE",
+        "FI",
+        "FR",
+        "DE",
+        "GI",
+        "GR",
+        "HU",
+        "IS",
+        "IE",
+        "IM",
+        "IT",
+        "XK",
+        "LV",
+        "LI",
+        "LT",
+        "LU",
+        "MT",
+        "MD",
+        "MC",
+        "ME",
+        "NL",
+        "MK",
+        "NO",
+        "PL",
+        "PT",
+        "RO",
+        "RS",
+        "SK",
+        "SI",
+        "ES",
+        "SE",
+        "CH",
+        "UA",
+        "GB",
+        "VA",
+        "FO",
+        "GG",
+        "JE",
+        "AX",
+        "SM",
+    }
+)
+
+
+def _region_of(cc: str) -> str:
+    return US if cc == "US" else EUROPE if cc in _EUROPE_CC else OTHER
 
 
 def _lookup(table: dict[str, str], cand: str) -> str | None:
+    cc = _country_of(cand)
+    return _region_of(cc) if cc else None
+
+
+def _country_of(cand: str) -> str | None:
+    table = _gazetteer()
     for key in _keys(cand):
-        code = table.get(key)
-        if code:
-            return _CODES[code]
+        cc = table.get(key)
+        if cc:
+            return cc
     return None
 
 
@@ -439,6 +513,29 @@ def _gazetteer_region(text: str) -> str | None:
         if hit and hit != OTHER:
             return hit
     return None
+
+
+"""
+"Munich, DE" is Germany and "Paris, TX" is Texas, and the difference is not
+in the code -- it is in whether the city agrees with it.
+
+Five US state codes are also European country codes: AL, DE, MD, ME and MT.
+Reading them as states put Munich in Delaware. Reading them as countries
+would put Birmingham, Alabama in Albania. So neither is assumed: the city
+beside the code is looked up, and the code is believed only when the city
+says the same thing. Paris is FR, which is not TX, so Texas keeps it.
+"""
+_TRAILING_CODE = re.compile(r"^(.*?)[,\s]+([A-Za-z]{2})\s*$")
+
+
+def _code_confirmed_by_city(text: str) -> str | None:
+    m = _TRAILING_CODE.match(text.strip())
+    if not m:
+        return None
+    city, code = m.group(1).strip(), m.group(2).upper()
+    if not city:
+        return None
+    return _region_of(code) if _country_of(city) == code else None
 
 
 def in_target(location: str | None) -> bool:

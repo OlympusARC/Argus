@@ -80,7 +80,12 @@ EUROPE = frozenset(
     }
 )
 
-CODE = {"us": "u", "europe": "e", "other": "o"}
+"""
+The ISO country code is stored, not the region, so a lookup can answer two
+questions: where is this place, and does it agree with a two-letter code
+written beside it. "Munich, DE" is Germany because Munich is DE; "Paris, TX"
+is Texas because Paris is FR and FR is not TX.
+"""
 
 """
 Words that appear in a location field meaning "no location", and that
@@ -170,17 +175,16 @@ def main(src: str) -> None:
             if len(f) < 15:
                 continue
             cc, pop = f[8], int(f[14] or 0)
-            region = "us" if cc == "US" else "europe" if cc in EUROPE else "other"
             for name in {f[1], f[2]} | {x for x in f[3].split(",") if x}:
                 for k in keys(name):
-                    weight[k][region] += pop
+                    weight[k][cc] += pop
 
     out = Path(__file__).resolve().parents[1] / "argus" / "classify" / "cities.tsv.gz"
     n = 0
     with gzip.open(out, "wt", encoding="utf-8", compresslevel=9) as fh:
         for k in sorted(weight):
-            region = max(weight[k].items(), key=lambda kv: kv[1])[0]
-            fh.write(f"{k}\t{CODE[region]}\n")
+            cc = max(weight[k].items(), key=lambda kv: kv[1])[0]
+            fh.write(f"{k}\t{cc}\n")
             n += 1
     print(f"{n:,} names -> {out} ({out.stat().st_size / 1024 / 1024:.1f} MB)")
 

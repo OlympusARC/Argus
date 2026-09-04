@@ -193,3 +193,36 @@ def test_shorthand_a_person_writes_but_no_gazetteer_holds(location):
     """ "sf" is two characters, below the length any place lookup will trust,
     and it is what a startup actually puts in the field."""
     assert geo.region(location) == geo.US
+
+
+"""
+Two-letter codes. Five US state codes are also European country codes --
+AL, DE, MD, ME, MT -- and both readings are wrong as a blanket rule.
+"""
+
+
+@pytest.mark.parametrize(
+    "location,want",
+    [
+        # the city agrees with the code, so the code is a country
+        ("Munich, DE", "europe"),
+        ("Valletta, MT", "europe"),
+        # the city disagrees, so the code is a state. These are real US cities
+        # with European names and are the reason neither reading can be assumed.
+        ("Paris, TX", "us"),
+        ("Berlin, CT", "us"),
+        ("Dublin, OH", "us"),
+        ("Vienna, VA", "us"),
+        ("Dover, DE", "us"),
+        ("Birmingham, AL", "us"),
+    ],
+)
+def test_a_two_letter_code_is_believed_only_when_the_city_agrees(location, want):
+    assert geo.region(location) == want, location
+
+
+def test_a_spelled_out_country_beats_a_two_letter_code():
+    """ "Tarragona, CT, Spain" was read as Connecticut: the abbreviation was
+    tried first and Spain never got a look."""
+    assert geo.region("Tarragona, CT, Spain") == geo.EUROPE
+    assert geo.region("Cambridge, MA, United States") == geo.US
