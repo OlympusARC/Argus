@@ -1,341 +1,438 @@
 # Argus
 
-A job aggregator built on three tiers that never merge: **companies** (who is
-hiring), **boards** (how we currently reach them), and a **feed** of postings.
+A job aggregator built on companies, the boards that reach them, and the postings they carry.
 
-Each tier outlives the one below it. A posting dies when the role is filled; a
-board slug dies the day a company switches ATS; the company and its careers page
-survive both. So the company is what we track, and the board is only the current
-means of doing it.
+Argus maintains a registry of company job boards, polls them on a schedule, and emits
+events when a posting appears, changes or closes. An LLM-driven orchestrator decides what
+maintenance work the system needs next and runs it within a fixed time budget.
 
-```
-              daily                 daily                 hourly
-  sources ──▶ companies ──▶ resolve careers ──▶ boards ──▶ poll ──▶ jobs ──▶ events
-              domain          careers_url       ats+slug         ats+slug+external_id
-                  ▲                                  │                    │
-                  └──── a board that names its employer ────┘             ▼
-                                                                       digest
-```
+The pipeline has **one runtime dependency** (`requests`). Storage is stdlib `sqlite3` or
+psycopg. Scheduling is GitHub Actions. Polling thousands of boards needs nothing else.
 
-Nothing writes upward. Discovery fills companies and boards; only the reconciler
-writes postings. That is what lets a noisy discovery source be harmless, and an
-ATS be added without re-running discovery.
+---
 
-## Two lanes
+## The problem
 
-The pipeline splits in two, and the split is the most important thing about it.
+Job boards are not a search problem. They are an inventory problem, with three properties
+that break the obvious design.
 
-**Lane A is the feed.** Hourly, fixed, deliberately dumb: poll every due board,
-diff it against what we stored, emit events, post a digest. It must produce job
-alerts even if everything else is broken.
+**There is no index of job boards.** Every company hosts its own, on one of a dozen ATS
+platforms, at a URL derived from a slug nobody publishes. `greenhouse.io/acmecorp` exists
+only if you already know Acme uses Greenhouse and that their slug is `acmecorp`. Finding
+boards is a discovery problem in its own right, distinct from reading them.
 
-**Lane B is the brain.** Daily, budgeted, and it *decides*. Rather than "run
-discover at 03:00 no matter what", it reads the measured state of the system and
-picks the most valuable work available — validate a backlog, investigate a source
-that stopped yielding, sweep a stale ruleset, or go looking for new sources.
+**Aggregators are lossy.** A posting reaches an aggregator when the company chooses to
+syndicate it, which is neither immediate nor complete. Reading the company's own board is
+the only way to see a posting at the moment it opens, and the only way to see the ones
+never syndicated at all.
 
-```
-cron ─┬─ hourly ──▶  LANE A   poll ──▶ notify              (no LangGraph, no LLM)
-      │
-      └─ daily ───▶  LANE B   measure ──▶ policy ──▶ act ──▶ record ──▶ ↺
-                                              │
-                                   discover · resolve · validate · classify
-                                   heal · prospect          (LLM, gated)
-```
+**Boards decay silently.** A slug is renamed, a company migrates ATS, a board empties out.
+Nothing announces this. A registry that does not actively distinguish *empty* from *gone*
+degrades into a list of URLs that mostly 404, and the failure looks exactly like a quiet
+hiring market.
 
-Lane A is not a node in Lane B's graph, and a test fails if the feed ever imports
-the LLM layer or the graph framework. A stuck brain, an exhausted quota or a
-LangGraph bug can therefore never delay a job posting.
+Argus treats all three as first-class: discovery is a subsystem, polling reads sources
+directly, and every board carries a validated status that decay updates.
 
-## Why discovery is hard
+---
 
-No ATS publishes an enumeration endpoint. `jobs.ashbyhq.com/sitemap.xml` returns
-the SPA shell and `robots.txt` declares nothing, so there is no way to ask "which
-companies use Ashby?" — every board must be *inferred* from third-party traces.
-Completeness is unprovable; the goal is convergence, measured by the marginal
-new-board yield of each run.
+## Architecture
 
-What makes it tractable: an unknown slug returns a clean `404` and a real one
-returns the entire board in a single unauthenticated `GET`. Guessing is cheap, so
-discovery sources are tuned for **recall, not precision** — `validate` is the one
-place that decides what is real.
+Two lanes, separated by what they need in order to run.
 
-## Why companies are the spine
+```mermaid
+flowchart LR
+  subgraph A["Lane A — the feed"]
+    direction TB
+    P[poll] --> D[diff] --> E[(events)] --> N[notify]
+  end
 
-Almost everything that names an employer on the public web does *not* link its
-ATS. Job-list repos route apply links through their own domain, funding filings
-name a company and nothing else, VC portfolio pages list names with homepages.
-Those are not failed board discoveries — they are probe targets:
+  subgraph B["Lane B — the orchestrator"]
+    direction TB
+    M[measure] --> PO{policy} --> ND[nodes]
+    ND --> AG[agents] --> G[gates] --> PR[(proposals)]
+  end
 
-```
-name ──▶ guess <name>.com/.io/.ai ──▶ fetch /careers ──▶ ATS link? ──▶ board
+  DISC[discovery] --> R[(registry)] --> P
+  B -.decides.-> DISC
+  B -.decides.-> R
 ```
 
-A guessed domain is a claim, not a fact, so it is kept only when the page proves
-it belongs to that company: it carries a board we already tied to them, or a slug
-matching their name. Without that check a company called Alan happily adopts some
-unrelated `alan.com` as its careers page.
+**Lane A is the feed.** Poll due boards, diff against what is stored, write events, post a
+digest. No LLM, no graph framework, no optional dependencies. It is the part that must run
+every two hours without fail, so it is the part with nothing in it that can fail
+interestingly.
 
-## Agents propose; code disposes
+**Lane B is the brain.** It measures the system, applies a policy to decide the single most
+valuable thing to do next, and runs it — within a wall-clock budget, resumable from a
+checkpoint. It requires `langgraph` and an LLM provider, both optional extras. A runner
+that only polls installs neither.
 
-Lane B can use a model for the parts that are genuinely open-ended — finding new
-sources, diagnosing a broken one, improving the classification rules. None of
-them can write anything.
+The separation is enforced by a test: the feed lane never imports the orchestrator or the
+LLM client.
 
-An agent's output is a row in `proposals`. A deterministic **gate** then measures
-the claim rather than judging the reasoning: a prospector says a page lists job
-boards, so the gate fetches it, extracts with the pipeline's own router, and
-counts how many are new to the registry. Twenty-five or more applies itself, one
-to twenty-four waits for a human, zero is a rejection with the evidence attached.
+---
 
-Two prohibitions are structural rather than procedural. A `diagnosis` has no gate,
-so there is no way to say yes to it, and no applier, so it cannot be enacted at
-all. Nothing touching the reconcile path has either — and a test asserts their
-continued absence, which is a check nobody can invert.
+## The data model
+
+Companies are the spine, not boards.
+
+```
+companies ──< boards ──< jobs
+     │           │
+     │           └──< board_sources    which discovery source found it, and when
+     └──────────────  domain, name, careers_url
+```
+
+A board is a *reach* into a company, not the company itself. Acme on Greenhouse and Acme on
+Workday after a migration are two boards and one company. Modelling it the other way makes
+a migration look like a company disappearing and a new one being born, which discards the
+posting history that makes the record worth keeping.
+
+Boards carry a status that validation settles:
+
+| status | meaning |
+|---|---|
+| `unvalidated` | discovered, never probed |
+| `active` | responds, has postings |
+| `empty` | responds, has none — the company is real, hiring is paused |
+| `dead` | does not respond, repeatedly |
+
+`empty` and `dead` are separate on purpose. Collapsing them discards the difference between
+a company that stopped hiring and a board that stopped existing, and only one of those is
+worth re-checking.
+
+The schema is versioned (`SCHEMA_VERSION = 11`) with in-place migrations, and every
+statement is portable across SQLite 3.39+ and Postgres.
+
+**Tables:** `companies`, `boards`, `board_sources`, `jobs`, `events`, `poll_runs`,
+`source_runs`, `proposals`, `notifier_state`, `notified_jobs`, `meta`.
+
+---
+
+## Lane A — the feed
+
+### Adapters
+
+Eight ATS platforms are pollable. Each adapter is a small module turning a board slug into
+`Posting` records.
+
+`ashby` · `bamboohr` · `breezy` · `greenhouse` · `lever` · `recruitee` · `smartrecruiters` · `workday`
+
+Three more — `icims`, `rippling`, `jobvite` — are recognised and stored by discovery but
+have no adapter, so their boards accumulate as `unvalidated` rather than being silently
+dropped.
+
+Polling order is not arbitrary. Workday paginates at 20 postings per request and averages
+183 per board, making it an order of magnitude slower than the rest, so it is polled last,
+with fewer workers, and takes whatever time remains. Per-host concurrency is capped by an
+in-process semaphore — which is why exactly one poll runner may exist at a time.
+
+### Reconcile and diff
+
+Each poll fetches a board, compares it against stored state, and produces one of four
+outcomes per posting: **new**, **edited**, **reopened**, **closed**. Closure is
+grace-guarded (`CLOSE_GRACE_POLLS`) so a single bad fetch cannot close a board's entire
+inventory, and a mass-close guard (`MASS_CLOSE_GUARD`) aborts the write when a board's
+disappearance looks like an outage rather than a hiring freeze.
+
+### Ingest filtering
+
+Filtering happens **before storage**, not at query time. Three axes:
+
+- **Family** — `engineering`, `fde`, `ai`, `data`, `security`, `product`
+- **Region** — `us`, `europe`, `remote`, `unknown`; anything resolving to `other` is rejected
+- **Age** — a fixed cutoff timestamp; anything older is not stored
+
+A posting whose board publishes no date takes the current run's date, truncated to the day.
+Day resolution matters: at per-second resolution the fallback encodes poll order, so
+sorting by date returns one company's entire board before the next one starts.
+
+### Classification
+
+A regex ruleset (`classify/`) assigns each posting a family, a seniority and an
+`is_engineering` flag. It is pure Python with **no model calls** — `argus classify` runs
+with no API key configured. Geographic resolution (`classify/geo.py`) maps a free-text
+location to a region through an ordered cascade: non-target countries and cities first,
+then US states and abbreviations, then European countries, then cities, then remote-only
+phrasing, then unknown.
+
+Every posting records the `ruleset` version that labelled it, so a ruleset change leaves
+the affected rows identifiable and re-sweepable.
+
+---
+
+## Lane B — the orchestrator
+
+### The policy is a pure function
+
+The decision is made neither by a model nor by the graph framework. It is an ordered list
+of rules over a measured snapshot — plain Python, testable without a database, a network or
+a graph:
+
+| # | rule | fires when | routes to |
+|---|---|---|---|
+| 1 | `budget` | wall-clock budget spent | **end** |
+| 2 | `collapsed_source` | a source's yield collapsed against its own history | `heal` |
+| 3 | `validate_backlog` | more than 1,500 boards unvalidated | `validate` |
+| 4 | `stale_ruleset` | more than 50,000 postings predate the current ruleset | `classify` |
+| 5 | `resolve_backlog` | more than 5,000 companies without a careers page | `resolve` |
+| 6 | `discover_due` | 24h or more since the last discovery run | `discover` |
+| 7 | `yield_flat` | 7-day marginal yield under 100 boards | `prospect` |
+
+First match wins, and rule order *is* the priority: a collapsed source outranks everything
+but the budget, because finding more boards through a broken source is how you get a month
+of quiet weeks.
+
+`argus orchestrate --dry-run` prints every rule and whether it fires, writing nothing. A
+policy you cannot inspect before it runs is one you have to trust.
+
+Two properties are enforced by the loop rather than by the rules. A node too expensive for
+the remaining budget is skipped *before* it starts, rather than killed mid-write. And a
+node that declines — for any reason, including an agent reporting no LLM provider — is
+never offered again during the same run.
+
+### The agents
+
+Three agents, each with the same discipline: **the model proposes, measurement disposes.**
+
+| agent | proposes | what actually decides |
+|---|---|---|
+| `classifier` (`argus mine`) | regex patterns mined from the tail of titles no rule matched | precision scored against already-labelled titles |
+| `prospector` (`argus prospect`) | URLs of pages that might enumerate job boards | how many *new* boards each URL yields when fetched |
+| `healer` (`argus heal`) | a hypothesis for why a source's yield collapsed | nothing — it writes a diagnosis and never acts |
+
+The classifier is the clearest case. The obvious move is to label the unplaced tail with a
+model, and the output would be model opinion that costs money, expires the next time the
+ruleset changes, and explains nothing. Mining *regex* from a sample instead produces rules:
+free forever after, reviewable by a human, and applied by the sweep that already exists.
+
+Note the healer's asymmetry. It has no gate and no applier, so the strongest thing it can
+do is be read.
+
+### Proposals and gates
+
+Agent output does not take effect. It lands in `proposals`, and a gate decides:
+
+```
+agent ──▶ proposal ──▶ gate ──▶ accepted ──▶ applier
+                          └───▶ rejected, with a recorded reason
+```
+
+`source` proposals are gated on measured new-board yield. `ruleset_patch` proposals are
+gated on precision against known labels, because a pattern that mislabels an
+already-correct title is the expensive kind of wrong. `diagnosis` has **no gate,
+deliberately** — giving one to a healer's hypothesis would be the first step toward letting
+it act.
+
+`argus proposals` shows what the agents suggested and what the gates decided.
+
+### Budget and resumption
+
+The orchestrator runs against a wall-clock budget and checkpoints through LangGraph, so a
+run killed by a CI job ceiling costs the remainder of a plan rather than the whole plan.
+
+---
+
+## Discovery
+
+Eighteen sources, fourteen enabled by default. Each yields `BoardRef` records that flow
+through one URL router, so every source benefits from every parser improvement.
+
+| source | what it reads |
+|---|---|
+| `seedfile` | a curated starting list |
+| `ashby_customers` | Ashby's own customer list |
+| `simplify` · `jobrepos` · `jobjson` | community-maintained job repositories |
+| `hn` · `hn_hiring` | Hacker News, and the monthly hiring threads |
+| `commoncrawl` | Common Crawl indexes, per ATS host |
+| `github` | code search for board URLs |
+| `urlscan` | submitted-URL archives |
+| `vcportfolio` | venture portfolio pages |
+| `funding` | SEC EDGAR Form D filings — a company that just raised is about to hire |
+| `ycombinator` | the YC company directory |
+| `websearch` | pluggable search backend |
+| `wayback` · `linkedin` · `zero2sudo` · `jobarchive` | opt-in |
+
+`argus sources` lists them with readiness and any missing configuration.
+
+### Source health
+
+`argus health` reports per-source yield and trend. A source is judged on **refs seen**, not
+on new boards found, because those answer different questions. Refs answer *is this source
+working*; new boards answer *has the world changed*. A mature source finding nothing new is
+saturated and healthy; a source seeing nothing at all is broken.
+
+Saturation is reported explicitly, so a working-but-exhausted source is never mistaken for
+a collapsed one.
+
+---
+
+## Storage
+
+SQLite by default; Postgres when `SUPABASE_*` or `DATABASE_URL` is set. Every statement is
+written to run on both — `ON CONFLICT DO NOTHING` rather than SQLite-only `OR IGNORE`,
+`RETURNING id` because psycopg exposes no `lastrowid`.
+
+Writes are batched. The pooler-facing connection reconnects once on a dropped socket, since
+a session pooler will close an idle connection during a long run.
+
+---
+
+## The dashboard
+
+`web-app/` — Next.js 16, React 19, Tailwind 4, shadcn/Radix components, reaching Postgres
+through the transaction pooler.
+
+Filters and sort live in URL parameters rather than React state, so the table stays a
+server component and any view is linkable. Applied and hidden marks are per-browser
+`localStorage`, not database rows: the jobs table is rebuildable, and there are no
+accounts, so a database row would be the truth for every viewer rather than for one person.
+
+```bash
+cd web-app && npm install && npm run dev
+```
+
+---
+
+## Scheduling
+
+Four GitHub Actions workflows.
+
+| workflow | schedule | concurrency group | ceiling |
+|---|---|---|---|
+| `ci` | push / PR | — | — |
+| `poll` | `0 */2 * * *` | `pipeline` | 50 min |
+| `discover` | `0 3 * * *` | `discovery` | 240 min |
+| `orchestrate` | `0 9 * * *` | `pipeline` | 50 min |
+
+A full registry sweep takes roughly 50 minutes, so a two-hourly poll leaves 70 minutes of
+headroom. `poll` and `orchestrate` share a concurrency group so Lane B can never overlap
+the feed and steal an ATS's rate limit. `discover` holds its own group: GitHub keeps at
+most one *pending* run per group, so a long discovery sharing the feed's group would
+collapse the queued polls into a single run.
+
+`orchestrate` runs at 09:00 rather than alongside `discover` so that `hours_since_discover`
+is small when the policy reads it — rule 6 does not fire, and the budget goes to
+validation, resolution and the agents instead of repeating a sweep that has just finished.
+
+---
 
 ## Quick start
 
 ```bash
-make install                    # venv + editable install
-argus init                      # create the database
-argus sources                   # which discovery sources are ready
-argus discover                  # fill companies and boards
-argus companies --resolve       # find their careers pages
-argus validate                  # probe boards, settle status
-argus poll                      # reconcile, emit job events
-argus stats                     # what we have
+pip install -e '.[dev]'          # add ,postgres and/or ,orchestrator as needed
+
+argus init                       # create the database
+argus discover                   # fill the board registry
+argus validate                   # probe and settle new boards
+argus poll                       # reconcile due boards, emit events
+argus notify                     # post the digest
 ```
 
-`companies --resolve` is the slow one: it fetches up to three candidate domains
-per company and most of them miss. It is capped per run and scheduled daily
-rather than swept, so the corpus fills in steadily instead of hammering thousands
-of unrelated domains at once.
+`argus stats` at any point gives a registry and feed summary.
+
+---
 
 ## Commands
 
-| | |
+| command | purpose |
 |---|---|
-| `init` | create or migrate the database |
-| `discover` | sweep every ready source for boards and companies |
-| `validate` | probe unvalidated boards, settle active or dead |
-| `companies` | the registry; `--resolve` attaches careers pages |
-| `careers` | find or re-check a company's careers page |
+| `init` | create the database |
+| `discover` | fill the board registry from all sources |
+| `validate` | probe unvalidated boards, settle their status |
 | `poll` | reconcile due boards and emit job events |
-| `classify` | apply the current ruleset to postings that predate it |
-| `notify` | post the hourly digest of new engineering roles |
-| `events` | recent new / edited / closed job events |
+| `classify` | apply the role ruleset to postings that predate it |
+| `notify` | post the digest of new engineering roles |
+| `events` | recent new/edited/closed job events |
+| `careers` | find or re-check company careers pages |
+| `companies` | the company registry: who we watch and where |
 | `stats` | registry and feed summary |
+| `sources` | list discovery sources and readiness |
 | `health` | per-source yield, and which sources have collapsed |
+| `llm` | which LLM providers are configured |
 | `orchestrate` | decide and run the most valuable work within a budget |
-| `proposals` | what the agents suggested, and what the gates decided |
-| `llm` | which model providers are configured |
 | `mine` | mine ruleset patterns from the unplaced title tail |
 | `prospect` | propose new discovery sources, measured by what they yield |
 | `heal` | diagnose a source whose yield collapsed |
+| `proposals` | what the agents suggested, and what the gates decided |
 
-Two are worth knowing before you run them. `argus orchestrate --dry-run` prints
-the state, every policy rule and what it would start with, without doing any of
-it. `argus notify --dry-run` renders the digest that would be posted and moves
-nothing.
+---
+
+## Configuration
+
+All configuration is environment variables. None is required for a SQLite run.
+
+### Storage
+
+| variable | default | purpose |
+|---|---|---|
+| `ARGUS_DB` | `data/argus.db` | SQLite path |
+| `ARGUS_DATABASE_URL` / `DATABASE_URL` | — | Postgres DSN |
+| `SUPABASE_REF` · `SUPABASE_REGION` · `SUPABASE_DB_PASSWORD` | — | Supabase pooler connection |
+
+### Ingest
+
+| variable | default | purpose |
+|---|---|---|
+| `ARGUS_STORE_ONLY_TECHNICAL` | `1` | restrict to technical families |
+| `ARGUS_STORE_FAMILIES` | `engineering,fde,ai,data,security,product` | which families to keep |
+| `ARGUS_STORE_REGIONS` | `us,europe,remote,unknown` | which regions to keep |
+| `ARGUS_STORE_POSTED_AFTER` | fixed timestamp | reject postings older than this |
+
+### Polling
+
+| variable | default | purpose |
+|---|---|---|
+| `ARGUS_WORKERS` | `12` | poll concurrency |
+| `ARGUS_PER_HOST_CONCURRENCY` | `4` | per-host cap |
+| `ARGUS_HTTP_TIMEOUT` | `20` | seconds |
+| `ARGUS_CLOSE_GRACE_POLLS` | `2` | polls a posting must be absent before closing |
+| `ARGUS_MASS_CLOSE_GUARD` | `5` | abort if a board loses more than this at once |
+| `ARGUS_BACKOFF_BASE` / `ARGUS_BACKOFF_MAX` | `900` / `86400` | failure backoff, seconds |
+| `ARGUS_DEAD_AFTER_FAILURES` | `8` | consecutive failures before a board is dead |
+
+### Integrations
+
+| variable | purpose |
+|---|---|
+| `GROQ_API_KEY` · `NVIDIA_API_KEY` · `GEMINI_API_KEY` | LLM providers, tried in that order |
+| `GITHUB_TOKEN` | raises the GitHub discovery rate limit |
+| `ARGUS_SEC_CONTACT` | name and email; EDGAR requires contact details in the User-Agent |
+| `ARGUS_DISCORD_WEBHOOK` | digest destination |
+
+No webhook configured is not an error — `notify` prints what it would have sent and exits 0.
+
+---
 
 ## Layout
 
 ```
 argus/
-  cli.py           command line surface, deliberately thin
-  core/            settings, storage, HTTP, data shapes, URL routing, name norms
-  adapters/        one per ATS -- fetch a board, return Postings
-  discovery/       one per source -- yield BoardRefs and CompanyRefs, nothing else
-  registry/        who exists (companies), which boards are real, careers pages
-  classify/        the role ruleset: engineering, fde, ai, data, security, ...
-  feed/            postings, the set-diff that writes them, and the digest
-  obs/             what each source actually produced, run over run
-  orchestrator/    measure, policy, nodes, graph -- Lane B's loop
-  proposals/       where an agent's output lands, and the gates that judge it
-  llm/             the provider chain; structured output or nothing
-  agents/          classifier, prospector, healer -- all advisory
-api/               FastAPI read surface
-supabase/          SQL migrations for Postgres
-scripts/           backfill: restore a corpus into Postgres
-seeds/             hand-written slug lists (source, tracked)
+  adapters/      one module per ATS; slug -> Posting
+  discovery/     one module per source; yields BoardRef
+  registry/      boards, companies, careers pages, validation
+  feed/          reconcile, diff, notify — Lane A
+  classify/      the role ruleset and geographic resolution
+  orchestrator/  measure, policy, nodes, graph — Lane B
+  agents/        classifier, prospector, healer
+  proposals/     gates and appliers
+  obs/           run history and source health
+  core/          config, db, http, models, urls
+web-app/         Next.js dashboard
 tests/
 ```
 
-The dependency direction is one-way: `core` knows nothing about the layers above
-it, `discovery` only ever writes to `registry`, and only the reconciler writes to
-`feed`.
+---
 
-## Running it
-
-The pipeline's only runtime dependency is `requests`. Everything else is an
-optional extra, so a runner that only polls installs neither the API nor the
-graph framework:
+## Development
 
 ```bash
-pip install -e '.[postgres]'                 # the pipeline
-pip install -e '.[postgres,orchestrator]'    # + Lane B
-pip install -e '.[dev]'                      # + tests and lint
+pip install -e '.[dev,orchestrator]'
+ruff check . && ruff format --check .
+pytest
 ```
 
-Scheduling is GitHub Actions rather than an in-process scheduler — schedules live
-in version-controlled YAML, each run is isolated, and failures are visible without
-building anything.
-
-| workflow | cadence | does |
-|---|---|---|
-| `poll.yml` | hourly | `poll`, `classify`, then `notify` |
-| `discover.yml` | daily | `discover`, then `companies --resolve` |
-| `orchestrate.yml` | daily | Lane B, within a 45-minute budget |
-
-> **The workflows are not committed yet.** They are held back deliberately until
-> the pipeline has been exercised by hand against a fresh database. Nothing in
-> this repo runs on a schedule until they land.
-
-### Configuration
-
-| variable | for |
-|---|---|
-| `SUPABASE_DB_PASSWORD` | Postgres, with the ref below. Either absent, everything falls back to local SQLite |
-| `SUPABASE_REF` | which project. Not committed -- see below |
-| `SUPABASE_REGION` | defaults to `us-west-2` |
-| `ARGUS_DISCORD_WEBHOOK` | the hourly digest. Absent, `notify` prints and exits 0 |
-| `ARGUS_STORE_FAMILIES` | which role families are stored at all (see below) |
-| `ARGUS_STORE_REGIONS` | which regions are stored; `other` is the only rejection |
-| `ARGUS_STORE_POSTED_AFTER` | the oldest posting worth storing, as an epoch |
-| `GROQ_API_KEY` / `NVIDIA_API_KEY` / `GEMINI_API_KEY` | the agents. Absent, they skip |
-| `GITHUB_TOKEN`, `BRAVE_API_KEY`, `ARGUS_SEC_CONTACT` | individual discovery sources |
-
-Every one is optional. A fresh clone with no configuration at all runs against
-SQLite, skips the sources and agents that need credentials, and says which ones
-it skipped.
-
-`SUPABASE_REF` carries no default, which is deliberate and the odd one out --
-the region defaults happily enough. The ref is not a secret; it is a username,
-and the password is what guards the database. But it names one specific host on
-a port open to the internet, a Supabase project ref cannot be rotated the way a
-password can, and nothing here is a browser client that would publish it anyway.
-A public repository is public forever, so there is nothing to buy by committing
-it. Set it as a repository *variable* and the password as a *secret*.
-
-### What gets stored
-
-Postings are filtered at ingest, not after. The corpus a board returns is mostly
-retail, clinical and sales work — roughly 80% of it — and storing that spends a
-500 MB budget on postings no query asks for.
-
-Six families are kept: `engineering`, `fde`, `ai`, `data`, `security` and
-`product`. Two are not: `design`, and the `other` catch-all that holds retail,
-clinical, sales, and non-software engineering — mechanical, civil, structural,
-manufacturing.
-
-The set is `ARGUS_STORE_FAMILIES` rather than a property of the classifier,
-because the boundary is a product decision. `is_engineering` answers whether
-something is engineering work; it cannot answer whether a product manager at a
-software company is worth keeping.
-
-The trade is real: a posting that is never stored can never be reclassified, so
-a later ruleset only improves what arrives after it. Every live board is
-re-polled hourly, so a broadened ruleset recovers its misses within a day — but
-set `ARGUS_STORE_ONLY_TECHNICAL=0` before a ruleset change if you would rather
-relabel the corpus than re-fetch it.
-
-Migrations in `supabase/migrations/` are **not** applied automatically by any
-workflow. Apply them with `make db-push` (which runs `supabase db push`) against
-the linked project.
-
-## Notes that are easy to get wrong
-
-- **ATS slugs are case-insensitive.** `ramp`, `Ramp` and `RAMP` are one board.
-  Slugs are lowercased on parse; skipping this creates duplicate rows that poll
-  the same board.
-- **A file is never a company.** Every ATS serves `robots.txt` and `sitemap.xml`
-  off the same path shape a board occupies. In one crawl, 62 of 62 Lever records
-  were `robots.txt` — and all 62 parsed cleanly as a board named `robots.txt`.
-- **HN escapes URLs as HTML entities** (`&#x2F;` for `/`), which silently defeats
-  any URL regex. `urls.extract_all` unescapes first — pinned by a test.
-- **`content_hash` excludes server timestamps.** Greenhouse bumps `updated_at` on
-  no-op republishes; hashing it would mark every job edited on every poll.
-- **Rediscovery never resurrects a dead board**, or Common Crawl would revive the
-  same dead slugs every month. Only `validate --revalidate-dead` does.
-- **An ATS host is never a company domain.** Storing `boards.greenhouse.io` as a
-  company's website merges every company on that ATS into one row.
-- **A company with two boards is a migration, not two companies.** Identity is the
-  domain, so a dead Greenhouse slug and a live Ashby one point at the same row.
-- **An acquired company's careers page serves the acquirer's board.**
-  `visly.app/careers` returns Figma's Greenhouse board, so any source probing an
-  arbitrary domain must check the domain looks like the board it found before
-  attributing it.
-- **A batch is bounded by postings, not by boards.** Workday averages 183 open
-  postings per board against Ashby's 17, and one board holds 20,598 — so a
-  hundred busy boards stages 181,401 rows and the edit statement runs past
-  Postgres's statement timeout.
-- **A trailing `\b` cannot match a suffix.** `quantitative research` silently
-  missed every *Researcher* in the corpus. The same shape hid *Vulnerability
-  Researcher* and *Solutions Architecture*.
-- **Substring matching on job titles is a trap.** `%llm%` matches *Fulfillment
-  Associate* and *Licensed Master Social Worker*. Every pattern uses word
-  boundaries for that reason.
-- **A bound is not a date, and is still worth having.** Workday will not date
-  71% of what it declines to date — it says "Posted 30+ Days Ago", which covers
-  last month and 2019 equally. Storing `now − 30d` would invent precision, but
-  the bound still answers the only question the age filter asks: if even the
-  newest date it could have is too old, it is too old.
-- **A date is captured once, while the posting is fresh.** An hourly poll sees
-  a posting within an hour of it appearing, so "Posted 5 Days Ago" becomes a
-  real date; the same posting reads "Posted 30+ Days Ago" a month later and
-  cannot be dated at all. Which is why the update paths `COALESCE` rather than
-  assign — assigning erased the date we already had, and only for postings that
-  happened to be edited.
-- **A posting nobody will date takes the time we saw it.** BambooHR publishes
-  no date anywhere and Workday omits the field on some postings; a Posted
-  column blank for those rows and filled for the rest reads as a bug rather
-  than as an absence. What keeps that honest is the age filter running first —
-  "Posted 30+ Days Ago" carries a bound, is rejected there, and never reaches
-  the fallback to be stamped with today. And it is written once, at insert:
-  written on every poll it would re-date a posting whenever it was edited, and
-  sort it to the top of the dashboard for a changed title.
-- **GitHub follows a rename forever, so a stale repo entry keeps working.** It
-  costs a request and hides a duplicate: two entries in the README-only list
-  resolved to repos already read as structured JSON, so the same data arrived
-  twice and the README source looked more productive than it was. Re-resolve
-  the list against the API when repos are added — ask for each name and compare
-  `full_name` to what you asked for.
-- **A loop that touches the network is the cost, not the work it does.** This
-  has now been the answer five times: `reclassify` at one UPDATE a row (4.5h →
-  48s), `add_boards` and `add_many` at three round trips a ref (528s → 4.9s),
-  the batch diff bounded by boards rather than postings, and `seed` at one
-  INSERT a posting (263s → 63s). Anything iterating over rows and calling
-  `execute` is doing latency, not computation.
-- **A filter that guards one door is not a filter.** The poll path had the
-  family, region and age tests; the seed path — the one discovery writes
-  through — had none. 2,036 postings arrived carrying no ingest rules at all:
-  postings from 2023 under a 2026 cutoff, families the product does not serve,
-  and a null region on every one. Both paths now call `jobs.keep`.
-- **Refs measure whether a source works; new boards measure whether the world
-  changed.** Watching the wrong one calls a healthy exhausted source broken:
-  Common Crawl returns 17,094 refs and 0 new boards, which is what success
-  looks like once it has given us everything it has. Collapse detection watched
-  boards and flagged three working sources, exiting non-zero — an alarm that
-  fires hourly on healthy input is an alarm nobody reads.
-- **A silent zero is almost never the world being empty.** A source that returns
-  nothing has usually been blocked, misconfigured or narrowed — Common Crawl swept
-  one host of ten for months while every run looked entirely normal.
-- **`Retry-After` is a request, not an instruction.** Cloudflare answers a
-  rate-limited client with `Retry-After: 39481` — eleven hours — and urllib3
-  obeys it literally, while holding the per-host slot. One request took a
-  twelve-thread poll to zero boards in two hours. A delay named in hours is a
-  refusal; `http.RETRY_AFTER_MAX` caps what we will wait for. Workable was
-  removed for answering that to everything: recognising a source we can never
-  poll just files boards forever, and 6,285 had accumulated against 664 jobs.
-- **A connection held across slow work is a connection you will lose.** A poll
-  keeps one session for twenty minutes and spends nearly all of it on HTTP, so
-  the pooler reclaims it and the next write finds a closed socket. The wrapper
-  reconnects once; the statements are idempotent, which is what makes that safe.
-- **The free-tier limit that binds is tokens per minute, not requests per day.**
-  Groq advertises 1,000 RPD and enforces 8,000 TPM, and `max_tokens` is charged
-  as *requested* rather than as used — so a batch asking for 8,192 was refused
-  outright while 997 of the day's requests remained.
-- **A reasoning model bills its thinking as completion tokens.** Labelling fifty
-  job titles cost 142 tokens a row at gpt-oss's default effort and 18 at
-  `reasoning_effort: "low"`. Same answers, same model: an eight-minute job
-  instead of a forty-three-minute one.
+The orchestrator extra is installed in CI so the tests exercise what ships. The pipeline
+itself needs neither it nor an LLM client, and a test asserts the feed lane never imports
+either.
