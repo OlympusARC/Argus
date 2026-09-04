@@ -127,7 +127,7 @@ def cmd_poll(args) -> int:
         conn, args.ats, limit=args.limit, workers=args.workers, force=args.force
     )
     if not summary.boards:
-        print("no boards due -- pass --force to poll regardless of schedule")
+        print(f"{args.ats:<16}no boards due -- pass --force to poll anyway")
         return 0
     print(summary.line())
     if summary.suspicious:

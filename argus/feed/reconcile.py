@@ -45,6 +45,14 @@ class BoardResult:
 
 @dataclass
 class RunSummary:
+    """
+    `ats` is on the summary rather than left to the caller because the line
+    is read in CI, where eight of these appear in sequence with nothing to
+    tell them apart. Decoding them meant knowing the loop order in the
+    workflow file.
+    """
+
+    ats: str = ""
     boards: int = 0
     failed: int = 0
     new: int = 0
@@ -55,11 +63,13 @@ class RunSummary:
     seconds: float = 0.0
 
     def line(self) -> str:
+        who = f"{self.ats:<16}" if self.ats else ""
+        rate = f"  {self.boards / self.seconds:.1f}/s" if self.seconds > 0 else ""
         return (
-            f"{self.boards:,} boards  {self.failed:,} failed  "
+            f"{who}{self.boards:,} boards  {self.failed:,} failed  "
             f"+{self.new:,} new  ~{self.edited:,} edited  "
             f"-{self.closed:,} closed  ^{self.reopened:,} reopened  "
-            f"in {self.seconds:.0f}s"
+            f"in {self.seconds:.0f}s{rate}"
         )
 
 
@@ -151,7 +161,7 @@ def run(
         raise SystemExit(f"no adapter for {ats!r}; supported: {adapters.supported()}")
 
     due = registry.due(conn, ats=ats, limit=limit, force=force)
-    summary = RunSummary()
+    summary = RunSummary(ats=ats)
     if not due:
         return summary
 

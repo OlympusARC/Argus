@@ -25,7 +25,17 @@ concurrency:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # Measured on the first real run: six of eight ATSs filled 50 minutes
+    # and bamboohr (5,113 boards) and workday never started.
+    #
+    #   ashby            3,753   650s      breezy      2,934   501s
+    #   greenhouse       5,112   893s      recruitee   1,241   297s
+    #   lever              849   176s      bamboohr    5,113   never reached
+    #   smartrecruiters  1,372   466s      workday       400   never reached
+    #
+    # 90 leaves the full sweep room inside a two-hour cadence and still
+    # bounds a hung run well short of the next one.
+    timeout-minutes: 90
     env:
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_REF: ${{ secrets.SUPABASE_REF }}
@@ -37,7 +47,17 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e '.[postgres]'
+      # The step is bounded, not just the job. When the *job* hit its ceiling
+      # the runner cancelled it mid-reconcile, and classify and notify were
+      # skipped -- so a poll that fills its window posts no digest and never
+      # relabels. That is the opposite of what should degrade: the digest is
+      # the product, and reconcile is the part that can safely be cut short,
+      # because next_poll_at persists and boards are polled most-overdue
+      # first. continue-on-error keeps a truncated sweep from failing the job
+      # and taking the two steps below with it.
       - name: Reconcile due boards
+        timeout-minutes: 72
+        continue-on-error: true
         run: |
           # Cheap ATSs first, Workday last. Workday paginates at 20 postings
           # per request and averages 183 per board, so it is an order of
@@ -53,7 +73,10 @@ jobs:
           # backlog -- boards are polled most-overdue first and next_poll_at
           # persists, so what does not fit here is simply the next run's work.
           argus poll --ats workday --workers 6 --limit 400
+      # if: always() so a cut-short reconcile still gets its rows labelled
+      # and its digest posted.
       - name: Classify anything the ruleset has not seen
+        if: always()
         run: argus classify
 
       # Last, and deliberately not `needs`-gated on anything: the digest
@@ -61,7 +84,8 @@ jobs:
       # first because the digest filters on is_engineering, which classify is
       # what sets. No webhook configured is not an error -- the step prints
       # what it would have sent and exits 0.
-      - name: Post the hourly digest
+      - name: Post the digest
+        if: always()
         env:
           ARGUS_DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: argus notify
