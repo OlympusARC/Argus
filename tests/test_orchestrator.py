@@ -283,3 +283,31 @@ def test_an_agent_declining_internally_also_stops_being_offered(conn, monkeypatc
     res = orchestrate(conn, budget_s=2_700, checkpointer=None)
     assert len(seen) == 1, f"offered {len(seen)} times, should be once"
     assert res["skipped"] == ["prospect"]
+
+
+def test_the_validate_node_reads_the_fields_the_result_has(conn, monkeypatch):
+    """It read `res.live`, which does not exist -- Result has `active`. Every
+    ATS that killed no boards therefore reported nothing, and three of four
+    validate tasks logged only their duration."""
+    from argus.orchestrator import nodes
+    from argus.registry import validate as validate_mod
+
+    monkeypatch.setattr(
+        validate_mod,
+        "run",
+        lambda conn, ats, **kw: validate_mod.Result(
+            ats=ats, checked=10, active=4, empty=3, dead=2, errored=1
+        ),
+    )
+    node = nodes.BUILDERS["validate"](conn)
+    out = node({"budget_s": 2_700, "spent_s": 0})
+    done = out["done"][0]
+    assert done["active"] > 0, "active must be reported, not a field that does not exist"
+    assert done["checked"] > 0 and done["empty"] > 0 and done["errored"] > 0
+
+
+def test_a_validate_result_names_its_ats():
+    """Four of these run in sequence and their lines are read side by side."""
+    from argus.registry.validate import Result
+
+    assert Result(ats="breezy", checked=3).line().startswith("breezy")

@@ -101,17 +101,33 @@ def validate_node(conn):
         from ..registry import validate as validate_mod
 
         t0 = time.time()
-        live = dead = 0
         """
         Split the cap across ATSs rather than spending it all on whichever
         sorts first: an unvalidated backlog is rarely one ATS's fault.
         """
         per = max(1, 2_000 // max(1, len(supported())))
+        checked = active = empty = dead = errored = 0
         for ats in supported():
+            """
+            Result has `active`, not `live`. Reading a field that does not
+            exist reported nothing for every ATS that killed no boards --
+            three of four validate tasks logged only their duration.
+            """
             res = validate_mod.run(conn, ats, limit=per)
-            live += getattr(res, "live", 0) or 0
-            dead += getattr(res, "dead", 0) or 0
-        out = _outcome("validate", t0, live=live, dead=dead)
+            checked += res.checked
+            active += res.active
+            empty += res.empty
+            dead += res.dead
+            errored += res.errored
+        out = _outcome(
+            "validate",
+            t0,
+            checked=checked,
+            active=active,
+            empty=empty,
+            dead=dead,
+            errored=errored,
+        )
         return _return(state, out)
 
     return node
