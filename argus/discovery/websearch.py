@@ -48,6 +48,19 @@ are part of the request body rather than the URL.
 """
 MONID_PROVIDER = "tinyfish"
 MONID_ENDPOINT = "/search"
+MONID_FETCH_ENDPOINT = "/fetch"
+
+"""
+TinyFish fetches a batch in parallel and caps it at ten. One call for ten
+pages rather than ten calls is the whole point: the pages that merely mention
+a board are the slow half of this source, and they have no dependency on each
+other.
+
+`links` asks for every <a href> on the page as absolute URLs, which is
+strictly better than mining the rendered text -- a board reached through a
+relative href or a shortened anchor appears in that array already resolved.
+"""
+FETCH_BATCH = 10
 
 """
 Sharpens TinyFish's ranking. It asks for a short statement of what the results
@@ -96,6 +109,23 @@ second call, and both are free.
 SWEEP_PHRASINGS = (
     "company careers open positions",
     "software engineer openings",
+)
+
+"""
+Also for the rendering backend: queries that find pages *listing* many boards
+rather than the boards themselves.
+
+This is what makes the batched fetch worth having. A host sweep returns one
+board per result and never fetches anything -- measured at 2% of results
+needing a page fetch at all. These return the opposite: ~19 mention-pages per
+query and no direct boards, and one "who is hiring" thread mined through
+/fetch gave 71 boards from a single batch of ten.
+"""
+LISTING_QUERIES = (
+    "who is hiring 2026 thread companies list",
+    "list of startups hiring software engineers careers pages",
+    "remote jobs directory companies careers greenhouse lever ashby",
+    "yc companies hiring engineers careers page",
 )
 
 _DDG_HREF = re.compile(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"')
@@ -162,10 +192,18 @@ class WebSearchSource(Source):
             "DuckDuckGo keyless is anti-bot blocked"
         )
 
+    def _auth(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {os.environ['MONID_API_KEY']}",
+            "Content-Type": "application/json",
+        }
+
     def _plan(self) -> list[tuple[str, str | None]]:
         """(query, include_domains) pairs, chosen by backend."""
         if self.backend == "monid":
-            return [(p, h) for h in SWEEP_HOSTS for p in SWEEP_PHRASINGS]
+            return [(p, h) for h in SWEEP_HOSTS for p in SWEEP_PHRASINGS] + [
+                (q, None) for q in LISTING_QUERIES
+            ]
         return [(q, None) for q in self.queries]
 
     def _monid(self, query: str, domains: str | None = None) -> list[str]:
@@ -176,10 +214,7 @@ class WebSearchSource(Source):
         rather than silently truncated to whatever one page holds.
         """
         out: list[str] = []
-        headers = {
-            "Authorization": f"Bearer {os.environ['MONID_API_KEY']}",
-            "Content-Type": "application/json",
-        }
+        headers = self._auth()
         for page in range(self.pages):
             """
             The result fields are documented (position, title, url, site_name,
@@ -216,6 +251,52 @@ class WebSearchSource(Source):
                 break
         return out[: self.per_query]
 
+    def _monid_fetch(self, batch: list[str]) -> Iterator[tuple[str, str]]:
+        """Render up to ten pages in one call. Yields (url, searchable text)."""
+        try:
+            data = http.post_json(
+                MONID,
+                json={
+                    "provider": MONID_PROVIDER,
+                    "endpoint": MONID_FETCH_ENDPOINT,
+                    "input": {
+                        "body": {
+                            "urls": batch,
+                            "links": True,
+                            "format": "markdown",
+                            "purpose": MONID_PURPOSE,
+                        }
+                    },
+                },
+                headers=self._auth(),
+                timeout=120,
+            )
+        except FetchError:
+            return
+        out = data.get("output") or {}
+        """
+        A failure on one URL never fails the batch -- it lands in errors[]
+        and the rest still return. Nothing to do about it here beyond not
+        treating a partial result as a failed one.
+        """
+        for r in out.get("results") or []:
+            if not isinstance(r, dict):
+                continue
+            url = r.get("final_url") or r.get("url") or ""
+            links = [x for x in (r.get("links") or []) if isinstance(x, str)]
+            yield url, "\n".join([*links, r.get("text") or ""])
+
+    def _pages(self, batch: list[str]) -> Iterator[tuple[str, str]]:
+        """(url, searchable text) for each page, batched where the backend can."""
+        if self.backend == "monid":
+            yield from self._monid_fetch(batch)
+            return
+        for u in batch:
+            try:
+                yield u, http.get_text(u, timeout=10)
+            except (FetchError, Exception):
+                continue
+
     def _search(self, query: str, domains: str | None = None) -> list[str]:
         if self.backend == "monid":
             return self._monid(query, domains)
@@ -245,7 +326,16 @@ class WebSearchSource(Source):
             self.available()
         seen: set[tuple[str, str]] = set()
         visited: set[str] = set()
+
+        def mine(batch: list[str]) -> Iterator[BoardRef]:
+            for src, blob in self._pages(batch):
+                for ref in urls.extract_all(blob):
+                    if (ref.ats, ref.slug) not in seen:
+                        seen.add((ref.ats, ref.slug))
+                        yield BoardRef(ref.ats, ref.slug, None, self.name, {"via": src[:120]})
+
         for query, domains in self._plan():
+            pending: list[str] = []
             for url in self._search(query, domains):
                 if url in visited:
                     continue
@@ -268,12 +358,10 @@ class WebSearchSource(Source):
                 """
                 if direct:
                     continue
-                try:
-                    html = http.get_text(url, timeout=10)
-                except (FetchError, Exception):
-                    continue
-                for ref in urls.extract_all(html):
-                    if (ref.ats, ref.slug) not in seen:
-                        seen.add((ref.ats, ref.slug))
-                        yield BoardRef(ref.ats, ref.slug, None, self.name, {"via": url[:120]})
+                pending.append(url)
+                if len(pending) >= FETCH_BATCH:
+                    yield from mine(pending)
+                    pending = []
+            if pending:
+                yield from mine(pending)
             time.sleep(self.pause)

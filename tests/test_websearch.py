@@ -172,8 +172,21 @@ def test_monid_sweeps_every_ats_host(monkeypatch):
     src = WebSearchSource()
     src.available()
     plan = src._plan()
-    assert {d for _, d in plan} == set(websearch.SWEEP_HOSTS)
-    assert len(plan) == len(websearch.SWEEP_HOSTS) * len(websearch.SWEEP_PHRASINGS)
+    assert {d for _, d in plan if d} == set(websearch.SWEEP_HOSTS)
+    assert len(plan) == (
+        len(websearch.SWEEP_HOSTS) * len(websearch.SWEEP_PHRASINGS)
+        + len(websearch.LISTING_QUERIES)
+    )
+
+
+def test_monid_also_looks_for_pages_listing_many_boards(monkeypatch):
+    """The host sweep never fetches anything -- every result is already a
+    board. These queries are what the batched fetch exists for."""
+    monkeypatch.setenv("MONID_API_KEY", "k")
+    src = WebSearchSource()
+    src.available()
+    unfiltered = [q for q, d in src._plan() if d is None]
+    assert unfiltered == list(websearch.LISTING_QUERIES)
 
 
 def test_bamboohr_is_not_swept(monkeypatch):
@@ -213,7 +226,9 @@ def test_a_result_that_is_itself_a_board_is_not_fetched(monkeypatch):
 
 
 def test_a_result_that_merely_mentions_a_board_is_fetched(monkeypatch):
-    monkeypatch.setenv("MONID_API_KEY", "k")
+    """Driven through Brave, which fetches one page at a time. The batched
+    equivalent for the rendering backend is covered further down."""
+    monkeypatch.setenv("BRAVE_API_KEY", "k")
     monkeypatch.setattr(
         websearch.http,
         "get_text",
@@ -226,3 +241,110 @@ def test_a_result_that_merely_mentions_a_board_is_fetched(monkeypatch):
     monkeypatch.setattr(websearch.time, "sleep", lambda _s: None)
     refs = list(src.discover())
     assert [(r.ats, r.slug) for r in refs] == [("lever", "acme")]
+
+
+"""
+Batched page fetching. The mention-pages are the slow half of this source and
+have no dependency on each other, so they go ten at a time -- TinyFish's cap,
+and it fetches them in parallel.
+"""
+
+
+def _fetch_stub(monkeypatch, pages, calls):
+    """Stand in for both transports so batching is observable either way."""
+
+    def fake_post(url, *, json=None, **kw):
+        ep = json["endpoint"]
+        if ep == "/search":
+            return {"results": [{"url": u} for u in pages.get("__search__", [])]}
+        batch = json["input"]["body"]["urls"]
+        calls.append(list(batch))
+        return {
+            "output": {
+                "results": [
+                    {"final_url": u, "links": pages.get(u, []), "text": ""}
+                    for u in batch
+                    if u in pages
+                ],
+                "errors": [
+                    {"url": u, "error": "empty_content"} for u in batch if u not in pages
+                ],
+            }
+        }
+
+    monkeypatch.setattr(websearch.http, "post_json", fake_post)
+
+
+def _src(monkeypatch, results):
+    monkeypatch.setenv("MONID_API_KEY", "k")
+    monkeypatch.setattr(websearch.time, "sleep", lambda _s: None)
+    src = WebSearchSource(pages=1)
+    src.available()
+    monkeypatch.setattr(src, "_plan", lambda: [("q", None)])
+    monkeypatch.setattr(src, "_search", lambda q, d=None: results)
+    return src
+
+
+def test_mention_pages_go_ten_at_a_time(monkeypatch):
+    results = [f"https://blog{i}.test" for i in range(25)]
+    pages = {u: ["https://jobs.lever.co/acme"] for u in results}
+    calls = []
+    _fetch_stub(monkeypatch, pages, calls)
+    src = _src(monkeypatch, results)
+    list(src.discover())
+    assert [len(c) for c in calls] == [10, 10, 5], "25 pages in 3 calls, not 25"
+
+
+def test_a_partial_batch_is_still_flushed(monkeypatch):
+    """Fewer than ten left at the end of a query must not be dropped."""
+    results = ["https://blog0.test", "https://blog1.test"]
+    calls = []
+    _fetch_stub(monkeypatch, results and {results[0]: ["https://jobs.lever.co/acme"]}, calls)
+    src = _src(monkeypatch, results)
+    refs = list(src.discover())
+    assert calls == [results]
+    assert [(r.ats, r.slug) for r in refs] == [("lever", "acme")]
+
+
+def test_links_are_mined_not_just_the_rendered_text(monkeypatch):
+    """A board reached through a relative href appears in `links` already
+    resolved, and never appears in the text at all."""
+    calls = []
+    _fetch_stub(monkeypatch, {"https://blog.test": ["https://jobs.lever.co/acme"]}, calls)
+    src = _src(monkeypatch, ["https://blog.test"])
+    assert [(r.ats, r.slug) for r in src.discover()] == [("lever", "acme")]
+
+
+def test_a_url_that_failed_in_the_batch_does_not_lose_the_rest(monkeypatch):
+    """TinyFish puts a failed URL in errors[] and still returns the others."""
+    calls = []
+    _fetch_stub(
+        monkeypatch,
+        {"https://ok.test": ["https://jobs.lever.co/acme"]},  # bad.test absent -> errors[]
+        calls,
+    )
+    src = _src(monkeypatch, ["https://bad.test", "https://ok.test"])
+    assert [(r.ats, r.slug) for r in src.discover()] == [("lever", "acme")]
+
+
+def test_a_board_result_never_enters_the_fetch_batch(monkeypatch):
+    """It is the SPA; rendering it costs a slot and returns what the URL said."""
+    calls = []
+    _fetch_stub(monkeypatch, {"https://blog.test": []}, calls)
+    src = _src(monkeypatch, ["https://jobs.lever.co/acme", "https://blog.test"])
+    list(src.discover())
+    assert calls == [["https://blog.test"]]
+
+
+def test_the_keyword_backends_still_fetch_one_at_a_time(monkeypatch):
+    """Only TinyFish has a batch endpoint. Brave must keep working."""
+    monkeypatch.setenv("BRAVE_API_KEY", "k")
+    got = []
+    monkeypatch.setattr(websearch.http, "get_text", lambda u, **kw: got.append(u) or "")
+    src = WebSearchSource()
+    src.available()
+    assert list(src._pages(["https://a.test", "https://b.test"])) == [
+        ("https://a.test", ""),
+        ("https://b.test", ""),
+    ]
+    assert got == ["https://a.test", "https://b.test"]
