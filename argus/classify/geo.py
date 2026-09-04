@@ -256,6 +256,9 @@ def region(location: str | None) -> str:
         return UNKNOWN
 
     text = location.strip()
+    hit = _iso3_prefix(text)
+    if hit:
+        return hit
     if NON_TARGET_COUNTRY.search(text) or NON_TARGET_CITY.search(text):
         return OTHER
     if US_COUNTRY.search(text) or US_STATE.search(text) or US_STATE_ABBR.search(text):
@@ -278,6 +281,92 @@ def region(location: str | None) -> str:
     if REMOTE_ONLY.search(text):
         return REMOTE
     return UNKNOWN
+
+
+"""
+Workday tenants often prefix a location with an ISO alpha-3 country code:
+"IND-BLR-Divyasree Technopolis", "CAN-ON-Mississauga". Only alpha-3 is read.
+Alpha-2 collides with US state codes -- "CA-QC-Longueuil" is Canada and
+"CA-San-Jose" is California -- and with company-internal codes like "DLF-"
+and "BCA-", so guessing from two letters is worse than not guessing.
+"""
+_ISO3 = {
+    "usa": US,
+    "gbr": EUROPE,
+    "irl": EUROPE,
+    "deu": EUROPE,
+    "fra": EUROPE,
+    "esp": EUROPE,
+    "prt": EUROPE,
+    "ita": EUROPE,
+    "nld": EUROPE,
+    "bel": EUROPE,
+    "che": EUROPE,
+    "aut": EUROPE,
+    "swe": EUROPE,
+    "nor": EUROPE,
+    "dnk": EUROPE,
+    "fin": EUROPE,
+    "pol": EUROPE,
+    "cze": EUROPE,
+    "rou": EUROPE,
+    "bgr": EUROPE,
+    "grc": EUROPE,
+    "hun": EUROPE,
+    "ukr": EUROPE,
+    "hrv": EUROPE,
+    "srb": EUROPE,
+    "est": EUROPE,
+    "lva": EUROPE,
+    "ltu": EUROPE,
+    "svk": EUROPE,
+    "svn": EUROPE,
+    "lux": EUROPE,
+    "mlt": EUROPE,
+    "cyp": EUROPE,
+    "isl": EUROPE,
+    "ind": OTHER,
+    "can": OTHER,
+    "chn": OTHER,
+    "jpn": OTHER,
+    "kor": OTHER,
+    "sgp": OTHER,
+    "aus": OTHER,
+    "nzl": OTHER,
+    "bra": OTHER,
+    "mex": OTHER,
+    "arg": OTHER,
+    "chl": OTHER,
+    "col": OTHER,
+    "zaf": OTHER,
+    "isr": OTHER,
+    "are": OTHER,
+    "sau": OTHER,
+    "tur": OTHER,
+    "rus": OTHER,
+    "vnm": OTHER,
+    "phl": OTHER,
+    "tha": OTHER,
+    "idn": OTHER,
+    "mys": OTHER,
+    "egy": OTHER,
+    "nga": OTHER,
+    "ken": OTHER,
+    "pak": OTHER,
+    "bgd": OTHER,
+    "lka": OTHER,
+    "hkg": OTHER,
+    "twn": OTHER,
+    "per": OTHER,
+    "crc": OTHER,
+    "cri": OTHER,
+}
+_ISO3_PREFIX = re.compile(r"^([A-Za-z]{3})[\s-]")
+
+
+def _iso3_prefix(text: str) -> str | None:
+    m = _ISO3_PREFIX.match(text)
+    return _ISO3.get(m.group(1).lower()) if m else None
 
 
 """
