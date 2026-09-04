@@ -76,7 +76,8 @@ directly, and every board carries a validated status that decay updates.
 
 ## Architecture
 
-<img width="803" height="580" alt="arch" src="https://github.com/user-attachments/assets/08dbe3b6-b655-4a8d-bdbe-62cd1a632915" />
+<img width="1255" height="893" alt="arch" src="https://github.com/user-attachments/assets/e856adfe-ff52-4f08-bb71-d22c8173fd7e" />
+
 
 
 **Lane A is the feed.** Poll due boards, diff against what is stored, write events, post a
