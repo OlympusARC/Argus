@@ -38,25 +38,8 @@ directly, and every board carries a validated status that decay updates.
 
 ## Architecture
 
-Two lanes, separated by what they need in order to run.
+<img width="803" height="580" alt="arch" src="https://github.com/user-attachments/assets/08dbe3b6-b655-4a8d-bdbe-62cd1a632915" />
 
-```mermaid
-flowchart LR
-  subgraph A["Lane A — the feed"]
-    direction TB
-    P[poll] --> D[diff] --> E[(events)] --> N[notify]
-  end
-
-  subgraph B["Lane B — the orchestrator"]
-    direction TB
-    M[measure] --> PO{policy} --> ND[nodes]
-    ND --> AG[agents] --> G[gates] --> PR[(proposals)]
-  end
-
-  DISC[discovery] --> R[(registry)] --> P
-  B -.decides.-> DISC
-  B -.decides.-> R
-```
 
 **Lane A is the feed.** Poll due boards, diff against what is stored, write events, post a
 digest. No LLM, no graph framework, no optional dependencies. It is the part that must run
