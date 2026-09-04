@@ -147,12 +147,82 @@ def test_the_request_names_the_provider_and_endpoint(monkeypatch):
     assert body["input"]["queryParams"]["query"] == "some query"
 
 
-def test_include_domains_is_never_sent(monkeypatch):
-    """Restricting to the ATS host is the obvious move and the wrong one: the
-    boards are SPAs, and the value is in the pages that link to them."""
-    calls = _stub(monkeypatch, [["https://a.test"]])
+def test_include_domains_is_sent_only_when_asked_for(monkeypatch):
+    """The keyword backends cannot use it -- a board is an empty shell to
+    them -- so it must not leak into a plan that did not ask for it."""
+    calls = _stub(monkeypatch, [["https://a.test"], ["https://b.test"]])
     monkeypatch.setenv("MONID_API_KEY", "k")
     src = WebSearchSource(per_query=1, pages=1)
     src.available()
     src._search("q")
     assert "include_domains" not in calls[0]["input"]["queryParams"]
+    src._search("q", "jobs.lever.co")
+    assert calls[1]["input"]["queryParams"]["include_domains"] == "jobs.lever.co"
+
+
+"""
+The query plan. It is per-backend because the backends see different webs:
+TinyFish renders a page before indexing it and so can be pointed straight at
+an ATS host; a keyword engine sees the same board as an empty shell.
+"""
+
+
+def test_monid_sweeps_every_ats_host(monkeypatch):
+    monkeypatch.setenv("MONID_API_KEY", "k")
+    src = WebSearchSource()
+    src.available()
+    plan = src._plan()
+    assert {d for _, d in plan} == set(websearch.SWEEP_HOSTS)
+    assert len(plan) == len(websearch.SWEEP_HOSTS) * len(websearch.SWEEP_PHRASINGS)
+
+
+def test_bamboohr_is_not_swept(monkeypatch):
+    """Its boards are <slug>.bamboohr.com, but the apex domain returns only
+    BambooHR's own careers page -- the vendor, not its customers."""
+    assert not any("bamboohr" in h for h in websearch.SWEEP_HOSTS)
+
+
+def test_keyword_backends_get_the_mention_queries_with_no_host_filter(monkeypatch):
+    monkeypatch.setenv("BRAVE_API_KEY", "k")
+    src = WebSearchSource()
+    src.available()
+    plan = src._plan()
+    assert all(d is None for _, d in plan)
+    assert [q for q, _ in plan] == list(websearch.QUERIES)
+
+
+"""
+discover().
+"""
+
+
+def test_a_result_that_is_itself_a_board_is_not_fetched(monkeypatch):
+    """The SPA's served HTML is the empty shell. Fetching it costs a round
+    trip and can only ever return what the URL already said."""
+    monkeypatch.setenv("MONID_API_KEY", "k")
+    fetched = []
+    monkeypatch.setattr(websearch.http, "get_text", lambda u, **kw: fetched.append(u) or "")
+    src = WebSearchSource(pages=1)
+    src.available()
+    monkeypatch.setattr(src, "_plan", lambda: [("q", "jobs.lever.co")])
+    monkeypatch.setattr(src, "_search", lambda q, d=None: ["https://jobs.lever.co/acme"])
+    monkeypatch.setattr(websearch.time, "sleep", lambda _s: None)
+    refs = list(src.discover())
+    assert [(r.ats, r.slug) for r in refs] == [("lever", "acme")]
+    assert fetched == [], "a board result must not be fetched"
+
+
+def test_a_result_that_merely_mentions_a_board_is_fetched(monkeypatch):
+    monkeypatch.setenv("MONID_API_KEY", "k")
+    monkeypatch.setattr(
+        websearch.http,
+        "get_text",
+        lambda u, **kw: '<a href="https://jobs.lever.co/acme">jobs</a>',
+    )
+    src = WebSearchSource(pages=1)
+    src.available()
+    monkeypatch.setattr(src, "_plan", lambda: [("q", None)])
+    monkeypatch.setattr(src, "_search", lambda q, d=None: ["https://someblog.test/hiring"])
+    monkeypatch.setattr(websearch.time, "sleep", lambda _s: None)
+    refs = list(src.discover())
+    assert [(r.ats, r.slug) for r in refs] == [("lever", "acme")]

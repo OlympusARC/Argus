@@ -16,11 +16,15 @@ one actually available:
      with an anti-bot page, so the source reports itself unavailable rather
      than silently returning nothing.
 
-Note what is deliberately *not* used: TinyFish takes include_domains, and
-restricting to jobs.ashbyhq.com is the obvious move and the wrong one. The
-whole premise above is that boards are SPAs which say nothing to a crawler --
-the value is in the ordinary HTML pages that link to them, which live on every
-other domain.
+The premise above holds for keyword engines, which is what backends 2 and 3
+are: they index HTML as served, so a board is invisible and only the pages
+mentioning it can be found. TinyFish renders the page first, so it sees the
+boards themselves -- which makes a direct host sweep possible there and only
+there. Measured on three pages of one host: 26 boards with include_domains
+against 14 without.
+
+So the query plan is per-backend, not global. That is the whole reason
+_plan() exists rather than one QUERIES list.
 """
 
 from __future__ import annotations
@@ -51,16 +55,47 @@ are for, and this task is unusual enough to be worth saying plainly: we want
 the pages that mention a board, not the board.
 """
 MONID_PURPOSE = (
-    "Find ordinary web pages that link to applicant-tracking-system job boards, "
-    "so the board URLs can be extracted from the page HTML."
+    "Find applicant-tracking-system job board URLs for individual companies, "
+    "and web pages that link to them."
 )
 
+"""
+For the keyword backends: find pages that *mention* a board.
+"""
 QUERIES = (
     '"jobs.ashbyhq.com"',
     '"jobs.ashbyhq.com" careers hiring',
     '"jobs.ashbyhq.com" apply engineering',
     '"job-boards.greenhouse.io" careers',
     '"jobs.lever.co" careers hiring',
+)
+
+"""
+For the rendering backend: sweep each ATS host directly.
+
+bamboohr is absent on purpose. Its boards are <slug>.bamboohr.com, but the
+apex domain only ever returns BambooHR's own careers page -- the filter
+matches the vendor rather than its customers, and three phrasings all
+returned www.bamboohr.com/careers/ and nothing else.
+"""
+SWEEP_HOSTS = (
+    "jobs.ashbyhq.com",
+    "job-boards.greenhouse.io",
+    "boards.greenhouse.io",
+    "jobs.lever.co",
+    "jobs.smartrecruiters.com",
+    "breezy.hr",
+    "recruitee.com",
+    "myworkdayjobs.com",
+)
+
+"""
+Two phrasings per host. Ranking differs enough between them to be worth the
+second call, and both are free.
+"""
+SWEEP_PHRASINGS = (
+    "company careers open positions",
+    "software engineer openings",
 )
 
 _DDG_HREF = re.compile(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"')
@@ -127,7 +162,13 @@ class WebSearchSource(Source):
             "DuckDuckGo keyless is anti-bot blocked"
         )
 
-    def _monid(self, query: str) -> list[str]:
+    def _plan(self) -> list[tuple[str, str | None]]:
+        """(query, include_domains) pairs, chosen by backend."""
+        if self.backend == "monid":
+            return [(p, h) for h in SWEEP_HOSTS for p in SWEEP_PHRASINGS]
+        return [(q, None) for q in self.queries]
+
+    def _monid(self, query: str, domains: str | None = None) -> list[str]:
         """One TinyFish search through Monid's broker.
 
         Paged: TinyFish caps a page at its own size and accepts page 0-10, so
@@ -153,6 +194,8 @@ class WebSearchSource(Source):
                 "purpose": MONID_PURPOSE,
                 "page": page,
             }
+            if domains:
+                params["include_domains"] = domains
             try:
                 data = http.post_json(
                     MONID,
@@ -173,9 +216,9 @@ class WebSearchSource(Source):
                 break
         return out[: self.per_query]
 
-    def _search(self, query: str) -> list[str]:
+    def _search(self, query: str, domains: str | None = None) -> list[str]:
         if self.backend == "monid":
-            return self._monid(query)
+            return self._monid(query, domains)
         if self.backend == "brave":
             try:
                 data = http.get_json(
@@ -202,20 +245,29 @@ class WebSearchSource(Source):
             self.available()
         seen: set[tuple[str, str]] = set()
         visited: set[str] = set()
-        for query in self.queries:
-            for url in self._search(query):
+        for query, domains in self._plan():
+            for url in self._search(query, domains):
                 if url in visited:
                     continue
                 visited.add(url)
                 """
                 the result URL itself sometimes contains the board link
                 """
-                for ref in urls.extract_all(url):
+                direct = urls.extract_all(url)
+                for ref in direct:
                     if (ref.ats, ref.slug) not in seen:
                         seen.add((ref.ats, ref.slug))
                         yield BoardRef(
                             ref.ats, ref.slug, None, self.name, {"via": "result_url"}
                         )
+                """
+                A result that was itself a board is not worth fetching: it is
+                the SPA, and its served HTML is the empty shell that made a
+                keyword engine useless here in the first place. Only pages
+                that merely mention a board repay the round trip.
+                """
+                if direct:
+                    continue
                 try:
                     html = http.get_text(url, timeout=10)
                 except (FetchError, Exception):
