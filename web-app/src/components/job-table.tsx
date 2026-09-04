@@ -36,10 +36,21 @@ function ago(ts: number | null) {
   return d < 30 ? `${d}d` : `${Math.floor(d / 30)}mo`;
 }
 
+/**
+ * Formatted in UTC, not the viewer's zone.
+ *
+ * posted_at is a UTC epoch and the ingest cutoff is a UTC midnight, so a
+ * posting four minutes past the cutoff rendered as the previous evening in
+ * EDT: the oldest row read "9 Aug" under a 10 Aug rule, and the boundary
+ * looked broken. The dates carry no time of day worth localising -- the
+ * fallback is a whole day, and a board's own date is a day too -- so the
+ * only thing a local zone can do here is shift them.
+ */
 const DATE = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "short",
   year: "numeric",
+  timeZone: "UTC",
 });
 
 /**
