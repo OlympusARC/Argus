@@ -48,12 +48,57 @@ well inside both: one embed per company, ten companies, and the rest of the
 digest reported as a count.
 """
 MAX_EMBEDS = 10
-MAX_JOBS_PER_EMBED = 8
+
+"""
+Discord rejects a message over 6000 characters with a 400, which from the
+outside looks exactly like a broken notifier. A line count cannot enforce
+that: the line carries the job's URL, and a Workday posting URL runs to 300
+characters on its own, so twenty lines across two groups measured at 14,680
+characters against the 6000 cap.
+
+So the cap is a character budget and the count is only a first cut. 5,200
+leaves room for the heading and Discord's own per-embed overhead.
+"""
+MAX_PER_GROUP = 25
+CHAR_BUDGET = 5_200
+
+"""
+So the two sections are separable at a glance without reading the heading.
+"""
+GROUP_COLOR = {"New Grad": 0x0F766E, "Internship": 0x7C3AED}
+
+"""
+The digest is not the corpus. The dashboard carries all 48,804 open roles;
+this exists to be read on a phone, so it answers one question -- what opened
+today that I could actually apply to.
+
+Two groups, kept separate rather than merged and sorted, because they are
+different searches: a new-grad role and an internship compete for different
+months and different decisions, and a merged list buries whichever is rarer
+that day.
+
+`unknown` region is deliberately excluded here even though it is stored.
+Ingest keeps it because a posting with an unparseable location is more
+likely to be worth a look than to be in the wrong hemisphere; a push
+notification has the opposite economics, and 12,978 unknown-region rows
+would drown the two groups this is for.
+"""
+GROUPS = (
+    ("New Grad", "new_grad", ("us", "remote")),
+    ("Internship", "intern", ("us", "remote")),
+)
+
+"""
+Built from GROUPS rather than written out, so the filter and the labels can
+never disagree. The values are module constants, not input.
+"""
+_LEVELS = sorted({lvl for _, lvl, _ in GROUPS})
+_REGIONS = sorted({r for _, _, rs in GROUPS for r in rs})
 
 SELECT_PENDING = """
 SELECT e.id, e.ts, e.type, e.ats, e.slug, e.external_id, e.title, e.url,
        j.is_engineering, j.is_fde, j.role_family, j.seniority, j.location,
-       b.company_name
+       j.region, b.company_name
 FROM events e
 JOIN jobs j
   ON j.ats = e.ats AND j.slug = e.slug AND j.external_id = e.external_id
@@ -62,6 +107,8 @@ LEFT JOIN boards b
 WHERE e.id > ?
   AND e.type IN ('new', 'reopened')
   AND (j.is_engineering = 1 OR j.is_fde = 1)
+  AND j.seniority IN (__LEVELS__)
+  AND j.region IN (__REGIONS__)
   AND NOT EXISTS (
       SELECT 1 FROM notified_jobs n
       WHERE n.ats = e.ats AND n.slug = e.slug AND n.external_id = e.external_id
@@ -69,6 +116,10 @@ WHERE e.id > ?
   )
 ORDER BY e.id
 """
+
+SELECT_PENDING = SELECT_PENDING.replace(
+    "__LEVELS__", ",".join(f"'{x}'" for x in _LEVELS)
+).replace("__REGIONS__", ",".join(f"'{x}'" for x in _REGIONS))
 
 
 @dataclass
@@ -89,6 +140,25 @@ class Digest:
     @property
     def fde(self) -> int:
         return sum(1 for r in self.rows if r["is_fde"])
+
+    def grouped(self) -> list[tuple[str, list[dict]]]:
+        """(label, rows) in GROUPS order, empty groups dropped.
+
+        Order comes from GROUPS rather than from row counts: the reader is
+        looking for the same section in the same place every day, and a
+        section that moves because it happened to be smaller is worse than
+        one that is sometimes short.
+        """
+        out = []
+        for label, level, regions in GROUPS:
+            rows = [
+                r
+                for r in self.rows
+                if r.get("seniority") == level and r.get("region") in regions
+            ]
+            if rows:
+                out.append((label, rows))
+        return out
 
 
 def now() -> int:
@@ -153,15 +223,16 @@ def build(conn, since_id: int | None = None) -> Digest:
 
 
 def _job_line(r: dict) -> str:
-    bits = []
+    """One row. Seniority is omitted on purpose -- it is the section
+    heading, so repeating it on every line is noise."""
+    who = r.get("company_name") or r.get("slug") or "?"
+    bits = [str(who)[:40]]
     if r["is_fde"]:
         bits.append("FDE")
-    if r["seniority"]:
-        bits.append(str(r["seniority"]))
     if r["location"]:
-        bits.append(str(r["location"])[:40])
-    tail = f"  ·  {' · '.join(bits)}" if bits else ""
-    title = (r["title"] or "?")[:90]
+        bits.append(str(r["location"])[:34])
+    tail = f"  ·  {' · '.join(bits)}"
+    title = (r["title"] or "?")[:80]
     return f"[{title}]({r['url']}){tail}" if r["url"] else f"{title}{tail}"
 
 
@@ -181,33 +252,56 @@ def render(d: Digest) -> dict | None:
                 f"`argus events --type new` to read them."
             )
         }
-    if not d.rows:
+    groups = d.grouped()
+    if not groups:
         return None
 
-    by_company: dict[str, list[dict]] = {}
-    for r in d.rows:
-        who = r["company_name"] or r["slug"] or "unknown"
-        by_company.setdefault(str(who), []).append(r)
+    counts = " · ".join(f"{len(rows)} {label.lower()}" for label, rows in groups)
+    head = f"**{len(d.rows)} new** — {counts}  ·  US & remote"
 
     """
-    Companies with the most openings first: a company posting six roles is
-    more interesting than six companies posting one.
+    Lines are taken round-robin across the groups rather than filling the
+    first and then the second. One group having long URLs would otherwise
+    spend the whole budget and leave the other empty, which reads as a
+    filter that stopped working rather than a message that ran out of room.
     """
-    ordered = sorted(by_company.items(), key=lambda kv: (-len(kv[1]), kv[0].lower()))
+    queues = [(label, list(rows[:MAX_PER_GROUP])) for label, rows in groups]
+    taken: dict[str, list[str]] = {label: [] for label, _ in queues}
+    spent = len(head)
+    i = 0
+    while any(q for _, q in queues):
+        label, q = queues[i % len(queues)]
+        i += 1
+        if not q:
+            continue
+        line = _job_line(q.pop(0))
+        if spent + len(line) + 1 > CHAR_BUDGET:
+            break
+        taken[label].append(line)
+        spent += len(line) + 1
+
+    """
+    A group whose every line was trimmed still gets its heading, so the
+    reader can see it matched and count how many.
+    """
     embeds = []
-    for who, jobs in ordered[:MAX_EMBEDS]:
-        shown = jobs[:MAX_JOBS_PER_EMBED]
-        body = "\n".join(_job_line(r) for r in shown)
-        if len(jobs) > len(shown):
-            body += f"\n_+{len(jobs) - len(shown)} more_"
-        embeds.append({"title": who[:200], "description": body[:4000], "color": 0x0F766E})
-
-    head = f"**{len(d.rows)} new** engineering role{'s' if len(d.rows) != 1 else ''}"
-    if d.fde:
-        head += f" · {d.fde} FDE"
-    hidden = len(ordered) - len(embeds)
-    if hidden > 0:
-        head += f" · {hidden} more compan{'ies' if hidden != 1 else 'y'} not shown"
+    for label, rows in groups:
+        lines = taken[label]
+        body = "\n".join(lines)
+        held = len(rows) - len(lines)
+        if held > 0:
+            body += (
+                f"\n_+{held} more — see the dashboard_"
+                if lines
+                else (f"_{held} matched, none shown — see the dashboard_")
+            )
+        embeds.append(
+            {
+                "title": f"{label} · {len(rows)}",
+                "description": body[:4000],
+                "color": GROUP_COLOR.get(label, 0x0F766E),
+            }
+        )
     return {"content": head, "embeds": embeds}
 
 

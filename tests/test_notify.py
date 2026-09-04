@@ -22,21 +22,53 @@ def conn(tmp_path):
     return c
 
 
-def add_job(conn, eid, *, title="Backend Engineer", eng=1, fde=0, loc="NYC"):
+def add_job(
+    conn,
+    eid,
+    *,
+    title="Backend Engineer",
+    eng=1,
+    fde=0,
+    loc="NYC",
+    seniority="new_grad",
+    region="us",
+):
+    """Defaults land inside the digest's filter on purpose.
+
+    The digest only announces new-grad and intern roles in the US or remote,
+    so a fixture outside that would make every test here assert on an empty
+    list and pass for the wrong reason. Tests that care about the filter set
+    these explicitly.
+    """
     conn.execute(
         """INSERT INTO jobs (ats, slug, external_id, title, url, location,
                              first_seen_at, last_seen_at, status,
-                             is_engineering, is_fde, role_family)
-           VALUES ('ashby','acme',?,?,?,?,0,0,'open',?,?,'engineering')""",
-        (eid, title, f"https://jobs.ashbyhq.com/acme/{eid}", loc, eng, fde),
+                             is_engineering, is_fde, role_family,
+                             seniority, region)
+           VALUES ('ashby','acme',?,?,?,?,0,0,'open',?,?,'engineering',?,?)""",
+        (
+            eid,
+            title,
+            f"https://jobs.ashbyhq.com/acme/{eid}",
+            loc,
+            eng,
+            fde,
+            seniority,
+            region,
+        ),
     )
 
 
-def add_event(conn, eid, kind="new"):
+def add_event(conn, eid, kind="new", title="Backend Engineer", url=""):
+    """title and url come from here, not from jobs.
+
+    SELECT_PENDING reads e.title and e.url, so a test that seeds only the
+    job's URL renders lines with no link and asserts on the wrong thing.
+    """
     conn.execute(
         """INSERT INTO events (ts, type, ats, slug, external_id, title, url)
-           VALUES (0, ?, 'ashby','acme', ?, 'Backend Engineer', '')""",
-        (kind, eid),
+           VALUES (0, ?, 'ashby','acme', ?, ?, ?)""",
+        (kind, eid, title, url),
     )
 
 
@@ -170,36 +202,73 @@ def test_dry_run_touches_nothing(conn, monkeypatch):
 
 def test_payload_stays_inside_discord_limits(conn):
     """Ten embeds and 6000 characters are hard caps; exceeding either is a
-    400 from the webhook, which would look exactly like a broken notifier."""
-    for i in range(40):
+    400 from the webhook, which would look exactly like a broken notifier.
+
+    Driven with real-length Workday URLs, because that is what broke the
+    first attempt: a line count cannot bound a payload whose lines carry a
+    300-character URL."""
+    long_url = (
+        "https://globalhr.wd5.myworkdayjobs.com/rec_rtx_ext_gateway/job/"
+        "US-TX-McKinney-2501-West-University-Drive/" + "Software-Engineer-New-Grad" * 3
+    )
+    for i in range(60):
+        lvl = "new_grad" if i % 2 else "intern"
         conn.execute(
-            """INSERT INTO boards (ats, slug, company_name, status, tier, first_seen_at)
-               VALUES ('ashby',?,?,'active',1,0)""",
-            (f"co{i}", f"Company {i}"),
+            """INSERT INTO jobs (ats, slug, external_id, title, url, location,
+                                 first_seen_at, last_seen_at, status,
+                                 is_engineering, is_fde, role_family,
+                                 seniority, region)
+               VALUES ('ashby','acme',?,?,?,?,0,0,'open',1,0,'engineering',?,'us')""",
+            (
+                f"j{i}",
+                "Staff Software Engineer, Platform Infrastructure and Reliability",
+                f"{long_url}/{i}",
+                "San Francisco, California, United States",
+                lvl,
+            ),
         )
-        for k in range(12):
-            conn.execute(
-                """INSERT INTO jobs (ats, slug, external_id, title, url, location,
-                                     first_seen_at, last_seen_at, status,
-                                     is_engineering, is_fde)
-                   VALUES ('ashby',?,?,?,'https://example.com/x','Remote',0,0,'open',1,0)""",
-                (f"co{i}", f"j{k}", "Staff Software Engineer, Platform Infrastructure"),
-            )
-            conn.execute(
-                """INSERT INTO events (ts, type, ats, slug, external_id, title, url)
-                   VALUES (0,'new','ashby',?,?,'x','')""",
-                (f"co{i}", f"j{k}"),
-            )
+        add_event(
+            conn,
+            f"j{i}",
+            title="Staff Software Engineer, Platform Infrastructure and Reliability",
+            url=f"{long_url}/{i}",
+        )
     notify.set_watermark(conn, 0)
     d = notify.build(conn)
     d.flooded = False  # exercise the embed path regardless of the guard
     payload = notify.render(d)
+
     assert len(payload["embeds"]) <= 10
     total = len(payload["content"]) + sum(
         len(e["title"]) + len(e["description"]) for e in payload["embeds"]
     )
     assert total < 6000, f"payload {total} chars exceeds Discord's limit"
-    assert "more companies not shown" in payload["content"]
+    assert all(len(e["description"]) <= 4096 for e in payload["embeds"])
+
+
+def test_both_groups_survive_a_tight_budget(conn):
+    """The trim takes lines round-robin. Filling one group and then the next
+    would let long URLs in the first spend the whole budget, leaving the
+    second empty -- which reads as a broken filter, not a full message."""
+    long_url = "https://x.test/" + "a" * 300
+    for i in range(40):
+        lvl = "new_grad" if i < 20 else "intern"
+        conn.execute(
+            """INSERT INTO jobs (ats, slug, external_id, title, url, location,
+                                 first_seen_at, last_seen_at, status,
+                                 is_engineering, is_fde, role_family,
+                                 seniority, region)
+               VALUES ('ashby','acme',?,?,?,'NYC',0,0,'open',1,0,'engineering',?,'us')""",
+            (f"j{i}", "Software Engineer", f"{long_url}/{i}", lvl),
+        )
+        add_event(conn, f"j{i}", title="Software Engineer", url=f"{long_url}/{i}")
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    d.flooded = False
+    payload = notify.render(d)
+    assert len(payload["embeds"]) == 2
+    for e in payload["embeds"]:
+        assert "https://" in e["description"], f"{e['title']} got no lines at all"
 
 
 def test_rows_are_newest_first(conn):
@@ -262,3 +331,105 @@ def test_prune_drops_only_expired_dedupe_rows(conn):
     notify.prune(conn)
     left = [r["external_id"] for r in conn.execute("SELECT external_id FROM notified_jobs")]
     assert left == ["keep"]
+
+
+"""
+The two groups. The digest exists to answer one question -- what opened
+today that I could apply to -- so what it leaves out matters as much as what
+it includes.
+"""
+
+
+def test_only_new_grad_and_intern_are_announced(conn):
+    """A senior role is a real posting and belongs in the corpus. It is not
+    what this notification is for."""
+    for i, lvl in enumerate(["new_grad", "intern", "senior", "staff", "manager", None]):
+        add_job(conn, f"j{i}", seniority=lvl)
+        add_event(conn, f"j{i}")
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    assert sorted(r["seniority"] for r in d.rows) == ["intern", "new_grad"]
+
+
+def test_only_us_and_remote_are_announced(conn):
+    for i, reg in enumerate(["us", "remote", "europe", "unknown", "other"]):
+        add_job(conn, f"j{i}", region=reg)
+        add_event(conn, f"j{i}")
+    notify.set_watermark(conn, 0)
+    d = notify.build(conn)
+    assert sorted(r["region"] for r in d.rows) == ["remote", "us"]
+
+
+def test_unknown_region_is_excluded_though_it_is_stored(conn):
+    """Ingest keeps unknown-region rows because an unparseable location is
+    more likely worth a look than in the wrong hemisphere. A push
+    notification has the opposite economics -- 12,978 of them would drown
+    the two groups this exists for."""
+    add_job(conn, "j0", region="unknown")
+    add_event(conn, "j0")
+    notify.set_watermark(conn, 0)
+    assert notify.build(conn).rows == []
+
+
+def test_the_two_groups_are_separate_and_labelled(conn):
+    add_job(conn, "a", seniority="new_grad")
+    add_event(conn, "a")
+    add_job(conn, "b", seniority="intern")
+    add_event(conn, "b")
+    notify.set_watermark(conn, 0)
+    payload = notify.render(notify.build(conn))
+    titles = [e["title"] for e in payload["embeds"]]
+    assert titles == ["New Grad · 1", "Internship · 1"]
+    colors = {e["color"] for e in payload["embeds"]}
+    assert len(colors) == 2, "the two sections must be distinguishable at a glance"
+
+
+def test_group_order_is_fixed_not_by_size(conn):
+    """The reader looks for the same section in the same place every day. A
+    section that moves because it happened to be smaller is worse than one
+    that is sometimes short."""
+    for i in range(5):
+        add_job(conn, f"i{i}", seniority="intern")
+        add_event(conn, f"i{i}")
+    add_job(conn, "g0", seniority="new_grad")
+    add_event(conn, "g0")
+    notify.set_watermark(conn, 0)
+    labels = [lbl for lbl, _ in notify.build(conn).grouped()]
+    assert labels == ["New Grad", "Internship"], "GROUPS order, not row counts"
+
+
+def test_a_group_with_nothing_new_is_omitted_entirely(conn):
+    """An empty section every day trains the reader to skip the message."""
+    add_job(conn, "g0", seniority="new_grad")
+    add_event(conn, "g0")
+    notify.set_watermark(conn, 0)
+    payload = notify.render(notify.build(conn))
+    assert [e["title"] for e in payload["embeds"]] == ["New Grad · 1"]
+
+
+def test_nothing_matching_posts_nothing(conn):
+    """Silence beats an hourly 'no new grad roles'."""
+    add_job(conn, "j0", seniority="senior")
+    add_event(conn, "j0")
+    notify.set_watermark(conn, 0)
+    assert notify.render(notify.build(conn)) is None
+
+
+def test_the_heading_names_both_counts_and_the_region_scope(conn):
+    add_job(conn, "a", seniority="new_grad")
+    add_event(conn, "a")
+    add_job(conn, "b", seniority="intern")
+    add_event(conn, "b")
+    notify.set_watermark(conn, 0)
+    head = notify.render(notify.build(conn))["content"]
+    assert "1 new grad" in head and "1 internship" in head
+    assert "US & remote" in head
+
+
+def test_the_query_filter_is_generated_from_the_groups(conn):
+    """The filter and the labels cannot be edited apart."""
+    for _, level, regions in notify.GROUPS:
+        assert f"'{level}'" in notify.SELECT_PENDING
+        for r in regions:
+            assert f"'{r}'" in notify.SELECT_PENDING
+    assert "__LEVELS__" not in notify.SELECT_PENDING
