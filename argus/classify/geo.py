@@ -267,7 +267,11 @@ real region first.
 REMOTE_ONLY = re.compile(
     r"\b(remote|hybrid|on[\s-]?site|anywhere|work[\s-]from[\s-]home|wfh|"
     r"home[\s-]based|any location|flexible|virtual|distributed|"
-    r"worldwide|global|multiple locations|various)\b",
+    r"worldwide|global|multiple locations|various|"
+    # An ATS writes the field in the company's own language. These are the
+    # ones the corpus actually contains.
+    r"remoto|remoot|à distance|a distancia|teletrabajo|télétravail|"
+    r"fernarbeit|homeoffice|home office|op afstand|zdalnie|distansarbete)\b",
     re.I,
 )
 
@@ -607,7 +611,13 @@ def _keys(name: str) -> list[str]:
         " ",
         unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower(),
     ).strip()
-    return [k for k in dict.fromkeys((low, folded)) if len(k) >= 3]
+    """
+    Four characters, not three. cities1000 holds a Nebraska town called Ord,
+    and against 883,458 names a three-letter hit is more often an accident
+    than a place. Short forms that matter -- "sf", "nyc" -- are matched by
+    US_SHORTHAND before the gazetteer is consulted.
+    """
+    return [k for k in dict.fromkeys((low, folded)) if len(k) >= 4]
 
 
 @lru_cache(maxsize=1)
