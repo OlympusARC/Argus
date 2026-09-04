@@ -6,6 +6,8 @@ corpus leaves the field empty. So these tests are mostly about what the
 module refuses to guess.
 """
 
+import pytest
+
 from argus.classify import geo
 from argus.core import config
 
@@ -31,7 +33,19 @@ def test_the_non_target_list_runs_before_the_city_lists():
     assert geo.region("Birmingham, AL") == geo.US
     assert geo.region("Cambridge, MA") == geo.US
     assert geo.region("Cambridge, United Kingdom") == geo.EUROPE
-    assert geo.region("Birmingham") == geo.UNKNOWN, "alone it is unreadable, and stays so"
+    """
+    A bare "Birmingham" used to stay unknown rather than be guessed. The
+    gazetteer settles it by population instead, and the change is deliberate:
+    12,050 open postings sat in `unknown`, and a bucket that large defeats
+    the point of filtering by region at all.
+
+    It is safe here because both Birminghams are in target regions, so the
+    ingest decision is the same either way and only the label differs. Where
+    a name is shared with somewhere we do not want -- London, Ontario against
+    London, England -- population picks the more likely referent.
+    """
+    assert geo.region("Birmingham") == geo.EUROPE
+    assert geo.region("London") == geo.EUROPE
 
 
 def test_austria_is_not_australia():
@@ -67,9 +81,21 @@ def test_a_real_place_beats_the_work_arrangement():
     assert geo.region("Remote - Bengaluru") == geo.OTHER
 
 
-def test_an_unrecognised_place_is_unknown_not_a_guess():
-    assert geo.region("Metzingen / Riederich") == geo.UNKNOWN
+def test_a_place_that_is_not_a_place_is_still_unknown():
+    """The gazetteer resolves towns, not premises. A single short token is
+    also refused: against 524,062 names the hit rate below four characters
+    is mostly accident, and a wrong region is worse than none."""
     assert geo.region("PICKLE RESEARCH CAMPUS") == geo.UNKNOWN
+    assert geo.region("Ord") == geo.UNKNOWN
+
+
+@pytest.mark.parametrize("word", ["Headquarters", "TBD", "None", "Corporate"])
+def test_a_word_meaning_no_location_is_not_read_as_one(word):
+    """GeoNames holds a place called Headquarters, and one called TBD. The
+    second is the costly one: it sits in a country we do not want, so a
+    posting whose location is genuinely undecided would be *rejected* rather
+    than merely unplaced. They are excluded when the file is built."""
+    assert geo.region(word) == geo.UNKNOWN
 
 
 def test_only_a_positive_elsewhere_is_refused():
@@ -82,3 +108,69 @@ def test_only_a_positive_elsewhere_is_refused():
     assert geo.in_target("Remote")
     assert geo.in_target(None)
     assert not geo.in_target("Bengaluru, India")
+
+
+"""
+The gazetteer. A GeoNames extract committed alongside the code, so ingest
+never touches the network and the answer is the same on every runner.
+"""
+
+
+def test_the_gazetteer_reads_a_city_in_its_own_script():
+    """ "София" is Sofia. Names are stored as written and folded to ASCII,
+    because a posting may use either."""
+    assert geo.region("София") == geo.EUROPE
+    assert geo.region("Sofia") == geo.EUROPE
+
+
+def test_towns_too_small_for_the_hand_written_lists():
+    for town in ("Schrobenhausen", "Stevenage", "Metzingen / Riederich", "Espelkamp"):
+        assert geo.region(town) == geo.EUROPE, town
+
+
+def test_the_gazetteer_rejects_as_well_as_accepts():
+    """Rejecting is the point. A table of only the places we want would leave
+    Mississauga and Pretoria in `unknown`, which ingest keeps."""
+    for town in ("Mississauga", "Pretoria", "Markham", "Cape Town"):
+        assert geo.region(town) == geo.OTHER, town
+
+
+def test_the_most_specific_component_decides():
+    """Longest first, so "Washington - Pullman" is read as Washington rather
+    than by whichever fragment happened to match."""
+    assert geo.region("Washington - Pullman") == geo.US
+
+
+def test_the_hand_written_rules_still_win():
+    """They encode judgement a population table cannot: that EMEA is a
+    region, that a bare Remote is its own answer."""
+    assert geo.region("EMEA") == geo.EUROPE
+    assert geo.region("Remote") == geo.REMOTE
+
+
+def test_a_missing_gazetteer_is_not_fatal(monkeypatch):
+    """Without the file every rule above still applies; the answer is just
+    `unknown` more often. A data file that fails to ship must not take the
+    pipeline with it."""
+    from pathlib import Path
+
+    geo._gazetteer.cache_clear()
+    monkeypatch.setattr(geo, "_DATA", Path("/nonexistent/cities.tsv.gz"))
+    try:
+        assert geo._gazetteer() == {}
+        assert geo.region("San Francisco, CA") == geo.US
+        assert geo.region("Schrobenhausen") == geo.UNKNOWN
+    finally:
+        geo._gazetteer.cache_clear()
+
+
+def test_a_bare_word_may_accept_but_not_refuse():
+    """A rejection at ingest is irreversible -- the posting is never stored --
+    while a wrong `us` is a row in the wrong bucket. Bare words are where the
+    table is least trustworthy: GeoNames holds a town called Progress, so
+    "Work IN Progress" resolved to somewhere we do not want and the posting
+    would have been dropped."""
+    assert geo.region("Work IN Progress") == geo.UNKNOWN
+    assert geo.region("Springfield Illinois") == geo.US
+    # ...but a whole fragment still refuses
+    assert geo.region("Mississauga, Ontario") == geo.OTHER

@@ -20,7 +20,11 @@ single component, and a country is rarely what it is.
 
 from __future__ import annotations
 
+import gzip
 import re
+import unicodedata
+from functools import lru_cache
+from pathlib import Path
 
 US = "us"
 EUROPE = "europe"
@@ -262,9 +266,68 @@ def region(location: str | None) -> str:
         return US
     if EU_CITY.search(text):
         return EUROPE
+    """
+    The gazetteer runs after the hand-written rules, not instead of them.
+    Those encode judgement a population table cannot -- that "EMEA" means
+    Europe, that a bare "Remote" is its own answer -- and they are faster.
+    This catches what is left: a town nobody thought to list.
+    """
+    hit = _gazetteer_region(text)
+    if hit:
+        return hit
     if REMOTE_ONLY.search(text):
         return REMOTE
     return UNKNOWN
+
+
+"""
+Names are tried longest first so the most specific component wins:
+"Washington - Pullman" should be read as Washington, and a short fragment
+like "US" or a house number should never decide it.
+
+A whole string or a separator-delimited fragment may return any region. A
+bare word split out of one may only return a region we keep.
+
+That asymmetry is the point. A rejection at ingest is irreversible -- the
+posting is never stored and cannot be reconsidered -- while a wrong `us` is
+merely a row in the wrong bucket. And bare words are where the table is
+least trustworthy: GeoNames holds a town called Progress, so "Work IN
+Progress" resolved to a country we do not want and the posting would have
+been dropped. Allowing bare words to accept but not refuse keeps 801
+postings that fragments alone would leave unplaced, without that risk.
+
+Single words are only tried at four characters or more. Below that the hit
+rate against a 524,052-name table is mostly accident -- there is a town
+called "Ord" -- and a wrong region is worse than none.
+"""
+_SPLIT = re.compile(r"[,/|()\[\]]+|\s+-\s+|\u2013|\u2014")
+_MIN_WORD = 4
+_CODES = {"u": US, "e": EUROPE, "o": OTHER}
+
+
+def _lookup(table: dict[str, str], cand: str) -> str | None:
+    for key in _keys(cand):
+        code = table.get(key)
+        if code:
+            return _CODES[code]
+    return None
+
+
+def _gazetteer_region(text: str) -> str | None:
+    table = _gazetteer()
+    if not table:
+        return None
+    parts = [p.strip() for p in _SPLIT.split(text) if p and p.strip()]
+    for cand in sorted({*parts, text}, key=len, reverse=True):
+        hit = _lookup(table, cand)
+        if hit:
+            return hit
+    words = {w for p in parts for w in p.split() if len(w) >= _MIN_WORD}
+    for cand in sorted(words, key=len, reverse=True):
+        hit = _lookup(table, cand)
+        if hit and hit != OTHER:
+            return hit
+    return None
 
 
 def in_target(location: str | None) -> bool:
@@ -280,3 +343,40 @@ def in_target(location: str | None) -> bool:
     from ..core import config
 
     return region(location) in config.STORE_REGIONS
+
+
+"""
+A GeoNames extract, built by scripts/build_gazetteer.py and committed so that
+ingest never touches the network. 524,062 names at 2.3 MB, loaded once per
+process in 0.4 seconds -- which a poll pays once and then reuses across
+thousands of postings.
+
+Names are stored both as written and folded to ASCII, because a posting may
+name a city in its own script: "\u0421\u043e\u0444\u0438\u044f" is in here, and resolves to Europe.
+"""
+_DATA = Path(__file__).with_name("cities.tsv.gz")
+
+
+def _keys(name: str) -> list[str]:
+    low = re.sub(r"[^\w ]+", " ", name.lower()).strip()
+    folded = re.sub(
+        r"[^a-z0-9 ]+",
+        " ",
+        unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower(),
+    ).strip()
+    return [k for k in dict.fromkeys((low, folded)) if len(k) >= 3]
+
+
+@lru_cache(maxsize=1)
+def _gazetteer() -> dict[str, str]:
+    """Absent is not fatal: without the file every rule above still applies
+    and the answer is simply `unknown` more often."""
+    if not _DATA.exists():
+        return {}
+    out: dict[str, str] = {}
+    with gzip.open(_DATA, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            key, _, code = line.rstrip("\n").partition("\t")
+            if code:
+                out[key] = code
+    return out
