@@ -57,7 +57,7 @@ export default async function Page({
         <div className="mt-5 flex flex-col gap-5">
           <JobTable jobs={jobs} />
           <Suspense>
-            <Pager page={filters.page ?? 1} hasMore={hasMore} />
+            <Pager page={filters.page ?? 1} hasMore={hasMore} total={count} />
           </Suspense>
         </div>
 
