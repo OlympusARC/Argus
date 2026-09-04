@@ -10,6 +10,10 @@ import { cn } from "@/lib/utils";
  * A sortable column header. Like the filters, the state is a URL parameter
  * rather than React state, so a sorted view can be linked and the table
  * stays a server component.
+ *
+ * The header row is uniformly white, so which column is sorted is carried by
+ * the arrow alone -- inactive columns show theirs on hover only, which is
+ * enough to say a column is clickable without dimming its label.
  */
 export function SortHeader({
   column,
@@ -51,8 +55,13 @@ export function SortHeader({
       type="button"
       onClick={toggle}
       className={cn(
-        "group inline-flex items-center gap-1 transition-colors hover:text-foreground",
-        active ? "text-foreground" : "text-muted-foreground",
+        /**
+         * `uppercase` is repeated here rather than left to the header row.
+         * text-transform inherits everywhere except into form controls,
+         * which the UA stylesheet resets -- so the th went to caps and the
+         * button inside it did not.
+         */
+        "group inline-flex items-center gap-1 uppercase",
         align === "right" && "flex-row-reverse",
       )}
     >

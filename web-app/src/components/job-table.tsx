@@ -109,8 +109,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
       <div className="overflow-x-auto rounded-lg border">
       <Table className="table-fixed">
         <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[5%]">Applied</TableHead>
+          <TableRow className="hover:bg-transparent [&>th]:text-xs [&>th]:font-bold [&>th]:tracking-wider [&>th]:text-foreground [&>th]:uppercase">
             <TableHead className="w-[38%]">
               <SortHeader column="title">Role</SortHeader>
             </TableHead>
@@ -119,6 +118,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
             </TableHead>
             <TableHead className="w-[12%]">Location</TableHead>
             <TableHead className="w-[8%]">Type</TableHead>
+            <TableHead className="w-[6%]">Applied</TableHead>
             <TableHead className="w-[6%]">
               <SortHeader column="source">Source</SortHeader>
             </TableHead>
@@ -127,7 +127,7 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                 Posted
               </SortHeader>
             </TableHead>
-            <TableHead className="w-[6%] text-right">
+            <TableHead className="w-[5%] text-right">
               <SortHeader column="seen" align="right">
                 Seen
               </SortHeader>
@@ -144,13 +144,6 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
               key={key}
               className={`group ${isApplied ? "opacity-45" : ""}`}
             >
-              <TableCell>
-                <Checkbox
-                  checked={isApplied}
-                  onCheckedChange={() => toggleApplied(key)}
-                  aria-label={`Mark ${j.title} as applied`}
-                />
-              </TableCell>
               <TableCell className="py-2.5">
                 {j.url ? (
                   <Link
@@ -186,6 +179,13 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
                     {j.role_family}
                   </Badge>
                 )}
+              </TableCell>
+              <TableCell>
+                <Checkbox
+                  checked={isApplied}
+                  onCheckedChange={() => toggleApplied(key)}
+                  aria-label={`Mark ${j.title} as applied`}
+                />
               </TableCell>
               <TableCell className="text-xs text-muted-foreground/80">
                 {j.ats}
