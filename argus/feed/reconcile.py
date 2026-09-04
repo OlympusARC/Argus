@@ -166,6 +166,19 @@ def run(
         return summary
 
     slugs = [r["slug"] for r in due]
+    """
+    Announce the phase before doing it. Read live in CI, the first sign that
+    an ATS had started used to be its first progress line 40 seconds later,
+    and the only sign of which ATS that was came from counting summary lines
+    against the loop order in the workflow file.
+    """
+    if progress_every:
+        print(
+            f"{ats:<16}start   {len(slugs):,} boards due"
+            f"{f' (limit {limit:,})' if limit else ''}  {workers} workers",
+            file=sys.stderr,
+            flush=True,
+        )
     started = int(time.time())
     run_id = db.insert_id(conn, "INSERT INTO poll_runs (started_at) VALUES (?)", (started,))
     t0 = time.time()
@@ -229,9 +242,17 @@ def run(
                     flush()
             if progress_every and summary.boards % progress_every == 0:
                 rate = summary.boards / max(time.time() - t0, 1e-9)
+                """
+                An ETA rather than only a rate: the useful question during a
+                90-minute job is whether this ATS finishes before the step's
+                ceiling, and that is a division the reader should not have to
+                do while watching a log scroll.
+                """
+                left = (len(slugs) - summary.boards) / max(rate, 1e-9)
                 print(
-                    f"    {summary.boards:,}/{len(slugs):,}  {rate:.0f}/s  "
-                    f"+{summary.new:,} new",
+                    f"{ats:<16}{summary.boards:,}/{len(slugs):,}  {rate:.1f}/s  "
+                    f"+{summary.new:,} new  ~{summary.edited:,} edited  "
+                    f"{summary.failed:,} failed  eta {left / 60:.0f}m",
                     file=sys.stderr,
                     flush=True,
                 )
