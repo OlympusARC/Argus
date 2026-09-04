@@ -60,11 +60,6 @@ export default async function Page({
             <Pager page={filters.page ?? 1} hasMore={hasMore} total={count} />
           </Suspense>
         </div>
-
-        <footer className="mt-14 text-xs text-muted-foreground">
-          Filtered at ingest: six role types, and locations not positively outside the US
-          or Europe. Posted dates come from the board; Workday and BambooHR publish none.
-        </footer>
       </main>
     </>
   );
