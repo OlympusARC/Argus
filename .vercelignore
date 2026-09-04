@@ -1,0 +1,30 @@
+# This project deploys api/index.py and nothing else. Without this file the
+# CLI uploads the whole working tree -- 281 MB of local database, virtualenv
+# and dashboard build output -- and fails the 100 MB limit.
+#
+# The deployable is the 1.5 MB that git tracks, minus the parts the API does
+# not import.
+
+# local state
+data/
+.venv/
+venv/
+*.db
+*.db-journal
+*.jsonl
+
+# the dashboard is its own Vercel project, with root directory web-app/
+web-app/
+
+# tooling
+.git/
+.github/
+tests/
+seeds/
+scripts/
+supabase/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+.claude/

@@ -1,0 +1,6 @@
+# The dashboard project has root directory web-app/, so only this folder is
+# uploaded. Build output and dependencies are rebuilt on Vercel.
+node_modules/
+.next/
+out/
+.vercel/

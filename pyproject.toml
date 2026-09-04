@@ -25,6 +25,14 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 [project.scripts]
 argus = "argus.cli:main"
 
+# Vercel loads this ASGI app and routes every request to it. Without it the
+# runtime falls back to the /api directory convention, which serves the
+# function only at /api/index -- and a path rewrite is no longer a fix,
+# because a rewrite now hands the app the rewritten path, so every route
+# saw "/api/index" and FastAPI 404'd all of them.
+[tool.vercel]
+entrypoint = "api.index:app"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
