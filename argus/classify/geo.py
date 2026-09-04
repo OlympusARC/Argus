@@ -125,7 +125,24 @@ end still refuses "Work IN Progress", where the code is followed by a word.
 US_STATE_ABBR = re.compile(
     r"(?:^|,\s*|\s)(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|"
     r"MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|"
-    r"VT|VA|WA|WV|WI|WY|DC)(?:\s*$|\s*,)"
+    r"VT|VA|WA|WV|WI|WY|DC)(?:\s*$|\s*,)",
+    # Case-insensitive: an ATS writes "Austin, tx" as readily as "Austin, TX",
+    # and matching only the uppercase form silently placed one and not the
+    # other. The positional slot is what keeps "or" and "me" out, not the
+    # capitals -- and a lowercase "Portland, or" is Oregon anyway.
+    re.I,
+)
+
+"""
+Abbreviations a person writes in a location field and no gazetteer holds.
+Kept short and unambiguous: "sf" and "nyc" mean one thing each, where "la"
+could be Los Angeles or Louisiana -- both US, so it is safe here, and both
+are already covered by the state codes above.
+"""
+US_SHORTHAND = re.compile(
+    r"(?:^|[,\s/|-])(sf|sfo|nyc|nyc metro|bay area|socal|norcal|dmv|"
+    r"silicon valley|south bay|east bay|dtla)(?:$|[,\s/|-])",
+    re.I,
 )
 
 EU_COUNTRY = re.compile(
@@ -261,7 +278,12 @@ def region(location: str | None) -> str:
         return hit
     if NON_TARGET_COUNTRY.search(text) or NON_TARGET_CITY.search(text):
         return OTHER
-    if US_COUNTRY.search(text) or US_STATE.search(text) or US_STATE_ABBR.search(text):
+    if (
+        US_COUNTRY.search(text)
+        or US_STATE.search(text)
+        or US_STATE_ABBR.search(text)
+        or US_SHORTHAND.search(text)
+    ):
         return US
     if EU_COUNTRY.search(text):
         return EUROPE

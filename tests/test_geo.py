@@ -174,3 +174,22 @@ def test_a_bare_word_may_accept_but_not_refuse():
     assert geo.region("Springfield Illinois") == geo.US
     # ...but a whole fragment still refuses
     assert geo.region("Mississauga, Ontario") == geo.OTHER
+
+
+@pytest.mark.parametrize(
+    "location", ["Zzyzxville, TX", "Zzyzxville, tx", "Zzyzxville, Tx", "Portland, or"]
+)
+def test_a_state_code_is_read_whatever_its_case(location):
+    """It was uppercase-only, so an ATS writing "Austin, tx" placed and one
+    writing "Austin, TX" did not. A made-up city here, because a real one
+    would be placed by the gazetteer and hide the bug."""
+    assert geo.region(location) == geo.US
+
+
+@pytest.mark.parametrize(
+    "location", ["sf", "SF", "sf, ca", "NYC", "Bay Area", "Remote - SF", "Silicon Valley"]
+)
+def test_shorthand_a_person_writes_but_no_gazetteer_holds(location):
+    """ "sf" is two characters, below the length any place lookup will trust,
+    and it is what a startup actually puts in the field."""
+    assert geo.region(location) == geo.US
