@@ -279,6 +279,31 @@ a session pooler will close an idle connection during a long run.
 
 ---
 
+## The read API
+
+`api/index.py` — FastAPI, deployed as a Vercel function. Everything here is a read: the
+pipeline is the only writer and it runs on GitHub Actions, so this process never needs a
+write connection or a transaction.
+
+| route | returns |
+|---|---|
+| `GET /health` | liveness, unauthenticated |
+| `GET /jobs` | open postings, filterable |
+| `GET /companies` | the company registry |
+| `GET /companies/{id}/jobs` | one company's postings |
+| `GET /events` | recent new/edited/closed events |
+| `GET /health/pipeline` | run recency and feed freshness |
+
+Two resources, not three. `boards` stays internal — it is how a company is reached, an
+implementation detail of collection rather than something a reader should have to join
+through — so `jobs` answers by company.
+
+Requests carry `X-API-Key` when `ARGUS_API_KEY` is set. The API uses the *transaction*
+pooler, because serverless invocations are short and numerous, where the workers hold one
+connection for a long poll and use the session pooler instead.
+
+---
+
 ## The dashboard
 
 `web-app/` — Next.js 16, React 19, Tailwind 4, shadcn/Radix components, reaching Postgres
@@ -400,6 +425,7 @@ All configuration is environment variables. None is required for a SQLite run.
 | `GITHUB_TOKEN` | raises the GitHub discovery rate limit |
 | `ARGUS_SEC_CONTACT` | name and email; EDGAR requires contact details in the User-Agent |
 | `ARGUS_DISCORD_WEBHOOK` | digest destination |
+| `ARGUS_API_KEY` | required in `X-API-Key` on the read API; unset leaves it open |
 
 No webhook configured is not an error — `notify` prints what it would have sent and exits 0.
 
@@ -419,7 +445,11 @@ argus/
   proposals/     gates and appliers
   obs/           run history and source health
   core/          config, db, http, models, urls
+api/             FastAPI read surface, deployed on Vercel
 web-app/         Next.js dashboard
+scripts/         one-off maintenance
+seeds/           curated starting lists, per ATS
+supabase/        migrations
 tests/
 ```
 
