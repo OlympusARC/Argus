@@ -55,7 +55,12 @@ SOFTWARE_SIGNAL = re.compile(
     r"ios|android|linux|unix|docker|aws|azure|gcp|terraform|"
     r"micro[\s-]?services?|distributed[\s-]systems?|compiler|observability|"
     r"react|node\.?js|rust|ruby|perl|etl|"
-    r"data[\s-](platform|pipeline))\b"
+    r"data[\s-](platform|pipeline|scien\w*)|"
+    # An AI or data-science role that also names a discipline: "Quality Data
+    # Science Co-op", "AI Scientist Intern, Computational Protein Design".
+    # The AI and DATA rules run after the exclusion, so without these the
+    # exclusion gets there first.
+    r"ai[\s-](scientist|engineer|research\w*)|data[\s-]scien\w*)\b"
     r"|\b(c\+\+|c#|\.net)",
     re.I,
 )
@@ -135,9 +140,18 @@ _DISCIPLINE = (
 Bounded gaps rather than `.*`: a long title can hold both a discipline and
 an unrelated "engineer", and an unbounded match would join them.
 """
+"""
+The noun is not only "engineer". An internship names its discipline and
+often never says the word: "Silicon Photonics Advanced Packaging Intern",
+"Field/Project Operations Internship - Heavy Civil Infrastructure". Those
+are the titles the digest exists to keep out, and requiring "engineer" let
+every one of them through.
+"""
+_NOUN = r"(?:engineer\w*|intern(?:ship)?|co[\s-]?op)"
+
 NON_SOFTWARE_ENG = re.compile(
-    rf"\b({_DISCIPLINE})\b[\w\s/&,.'()–—·-]{{0,28}}\bengineer\w*\b"
-    rf"|\bengineer\w*\b[\w\s/&,.'()–—·-]{{0,20}}\b({_DISCIPLINE})\b",
+    rf"\b({_DISCIPLINE})\b[\w\s/&,.'()–—·-]{{0,36}}\b{_NOUN}\b"
+    rf"|\b{_NOUN}\b[\w\s/&,.'()–—·-]{{0,24}}\b({_DISCIPLINE})\b",
     re.I,
 )
 
