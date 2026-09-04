@@ -60,6 +60,12 @@ NON_TARGET_CITY = re.compile(
     r"kochi|coimbatore|thiruvananthapuram|trivandrum|indore|chandigarh|"
     r"toronto|vancouver|montreal|montréal|ottawa|calgary|edmonton|waterloo, on|"
     r"tel aviv|jerusalem|haifa|herzliya|"
+    # Guards the state entry in US_STATE: "Tbilisi, Georgia" must resolve to
+    # the country, and NON_TARGET runs first.
+    r"tbilisi|batumi|kutaisi|yerevan|baku|"
+    # Canadian cities seen in the corpus beyond the six already listed
+    r"mississauga|markham|kitchener|oakville|brampton|burnaby|richmond hill|"
+    r"halifax|winnipeg|saskatoon|regina|london, on|hamilton, ontario|"
     r"tokyo|osaka|kyoto|yokohama|seoul|busan|"
     r"shanghai|beijing|shenzhen|guangzhou|hangzhou|chengdu|suzhou|wuhan|"
     r"taipei|hsinchu|kaohsiung|"
@@ -94,18 +100,26 @@ US_STATE = re.compile(
     r"missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|"
     r"new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|"
     r"rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|"
+    # See NON_TARGET_CITY: Tbilisi and Batumi are matched before this runs,
+    # which is what lets the state be listed without claiming the country.
+    r"georgia|"
     r"virginia|west virginia|wisconsin|wyoming|district of columbia)\b",
     re.I,
 )
 
 """
-Two-letter state codes only in a positional slot -- start of the string or
-after a comma, and at the end or before another comma. Bare `\b(CA|IN|OR)\b`
-would take "CA" out of "Casablanca" and, worse, read the ordinary words
-"in", "or" and "me" as Indiana, Oregon and Maine.
+Two-letter state codes only in a positional slot -- start of the string, after
+a comma, or after a space when the code ends the string. Bare `\b(CA|IN|OR)\b`
+would take "CA" out of "Casablanca" and, worse, read the ordinary words "in",
+"or" and "me" as Indiana, Oregon and Maine.
+
+The space form is why the trailing anchor matters. Workday puts the location
+in its URL path as hyphens -- "Southlake-TX" -- so a comma never appears, and
+requiring one left 3,426 US postings unplaceable. Allowing a space only at the
+end still refuses "Work IN Progress", where the code is followed by a word.
 """
 US_STATE_ABBR = re.compile(
-    r"(?:^|,\s*)(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|"
+    r"(?:^|,\s*|\s)(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|"
     r"MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|"
     r"VT|VA|WA|WV|WI|WY|DC)(?:\s*$|\s*,)"
 )

@@ -633,3 +633,56 @@ def test_the_gap_is_bounded_so_a_long_title_does_not_join_two_halves():
         "listing for a Backend Engineer on the platform team"
     )
     assert classify(t).is_engineering, "the gap must not span the whole title"
+
+
+"""
+Region gaps found by measuring the live corpus: 41% of open Workday postings
+and 50% of BambooHR ones resolved to `unknown`.
+"""
+
+
+@pytest.mark.parametrize(
+    "location,want",
+    [
+        # a state code after a space, not a comma. Workday encodes its
+        # location in a URL path as hyphens, so a comma never appears.
+        ("Southlake TX", "us"),
+        ("Atlanta GA", "us"),
+        ("USA TX Austin", "us"),
+        # ...but a code followed by a word is still a word
+        ("Work IN Progress", "unknown"),
+        ("Casablanca", "other"),
+        # Georgia is a US state. The country is caught before this runs.
+        ("Suwanee, Georgia", "us"),
+        ("Tbilisi, Georgia", "other"),
+        ("Yerevan, Yerevan", "other"),
+        # Canadian cities seen in the corpus, none of them target
+        ("Mississauga, Ontario", "other"),
+        ("Markham", "other"),
+        ("Kitchener, Ontario", "other"),
+    ],
+)
+def test_region_placement(location, want):
+    from argus.classify import geo
+
+    assert geo.region(location) == want, location
+
+
+def test_workday_reads_the_location_out_of_its_own_url():
+    """externalPath is /job/<location>/<title>_<req>. 7,128 open postings
+    published no locationsText and 99% of them carried this."""
+    from argus.adapters.workday import _location_from_path as f
+
+    assert f("/job/Belfast-10-Mays-Meadow/Platform-Consultant_JR1") == "Belfast 10 Mays Meadow"
+    assert f("/job/Southlake-TX/Engineer_JR2") == "Southlake TX"
+
+
+@pytest.mark.parametrize(
+    "path", [None, "", "/details/Some-Job_JR4", "/job/12345/X_JR5", "/job//X_JR6"]
+)
+def test_a_path_segment_that_is_not_a_place_is_not_a_location(path):
+    """A requisition number in the slot would be stored as a location and
+    then classified, which is worse than having none."""
+    from argus.adapters.workday import _location_from_path as f
+
+    assert f(path) is None
