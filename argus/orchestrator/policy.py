@@ -25,13 +25,6 @@ class Rule:
     name: str
     action: str
     why: Callable[[dict], str | None]
-    """
-    Rules whose node does not exist yet are declared, matched and logged, but
-    fall through to the next rule. That keeps the policy's real shape visible
-    from the first commit and makes adding the healer an addition rather than
-    a rewrite.
-    """
-    planned: bool = False
 
 
 def _budget(s: dict) -> str | None:
@@ -75,17 +68,22 @@ def _yield_flat(s: dict) -> str | None:
 
 
 """
-Tried in order; first match wins. Rules 2 and 7 route to agents that arrive
-in B5 -- until then they log what they would have done and fall through.
+Tried in order; first match wins.
+
+A rule whose node the graph does not have is still matched and still
+reported -- decide() records it in _skipped_rules and falls through -- so
+work that was identified and dropped stays visible rather than silently
+vanishing. That is a property of decide(), not of the rule: nothing here
+needs to declare whether its node exists.
 """
 RULES: list[Rule] = [
     Rule("budget", END, _budget),
-    Rule("collapsed_source", "heal", _collapsed, planned=True),
+    Rule("collapsed_source", "heal", _collapsed),
     Rule("validate_backlog", "validate", _unvalidated),
     Rule("stale_ruleset", "classify", _stale_ruleset),
     Rule("resolve_backlog", "resolve", _unresolved),
     Rule("discover_due", "discover", _discover_due),
-    Rule("yield_flat", "prospect", _yield_flat, planned=True),
+    Rule("yield_flat", "prospect", _yield_flat),
 ]
 
 
