@@ -6,8 +6,46 @@ Argus maintains a registry of company job boards, polls them on a schedule, and 
 events when a posting appears, changes or closes. An LLM-driven orchestrator decides what
 maintenance work the system needs next and runs it within a fixed time budget.
 
-The pipeline has **one runtime dependency** (`requests`). Storage is stdlib `sqlite3` or
-psycopg. Scheduling is GitHub Actions. Polling thousands of boards needs nothing else.
+Built on one runtime dependency (`requests`), SQLite or Postgres, and GitHub Actions.
+
+---
+
+## How it works
+
+Most companies post their jobs on their own careers page, hosted by one of a dozen
+platforms — Greenhouse, Lever, Workday and the like. Those pages are the source. Argus
+reads them directly, rather than waiting for a job to reach an aggregator.
+
+It runs as a loop with four steps.
+
+**1. Find the boards.** Eighteen sources are swept for links that look like a company job
+board — Common Crawl, GitHub, Hacker News, SEC filings of companies that just raised, and
+others. Each yields a candidate like *"Acme is on Greenhouse under the slug `acmecorp`"*.
+Nobody publishes a list of these, so finding them is a job in itself.
+
+**2. Check they are real.** Each new board is visited once. Does it respond? Does it have
+any jobs? A board that answers but is empty is a real company that has paused hiring; a
+board that does not answer at all has moved or shut down. Those are very different facts,
+so they are stored as different states.
+
+**3. Read them, on a clock.** Every two hours each live board is fetched and compared
+against what was stored last time. Anything that changed becomes an event — a job
+**opened**, **changed**, **reopened** or **closed**. That comparison is the whole product:
+it is what lets you see a role the hour it appears, instead of whenever an aggregator
+catches up.
+
+**4. Keep the list clean.** A ruleset labels every job by kind (engineering, product,
+security…), seniority and region, and anything outside the target is dropped *before* it
+is stored rather than filtered out later at display time.
+
+Once a day a separate process looks at the state of the whole system and decides what
+needs attention most — a backlog of unchecked boards, a source that quietly stopped
+working, jobs labelled by an outdated ruleset — then spends a fixed time budget on it.
+That part uses an LLM, and it is deliberately kept away from step 3: **the job feed runs
+on plain Python and would keep working if every model, every API key and every optional
+dependency vanished.**
+
+What comes out: a Discord digest of new roles, a read API, and a dashboard.
 
 ---
 
