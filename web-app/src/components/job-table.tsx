@@ -1,5 +1,17 @@
+"use client";
+
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, EyeOff, MoreHorizontal, RotateCcw } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { jobKey, useJobState } from "@/lib/use-job-state";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -67,6 +79,11 @@ function posted(ts: number | null) {
 }
 
 export function JobTable({ jobs }: { jobs: Job[] }) {
+  const { applied, dismissed, toggleApplied, dismiss, restoreAll } = useJobState();
+
+  const visible = jobs.filter((j) => !dismissed.has(jobKey(j)));
+  const hiddenHere = jobs.length - visible.length;
+
   if (jobs.length === 0) {
     return (
       <div className="rounded-lg border border-dashed py-16 text-center">
@@ -79,36 +96,61 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="flex flex-col gap-2">
+      {hiddenHere > 0 && (
+        <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
+          {hiddenHere} hidden on this page
+          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={restoreAll}>
+            <RotateCcw className="size-3" />
+            Restore all
+          </Button>
+        </div>
+      )}
+      <div className="overflow-x-auto rounded-lg border">
       <Table className="table-fixed">
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[36%]">
+            <TableHead className="w-[5%]">Applied</TableHead>
+            <TableHead className="w-[38%]">
               <SortHeader column="title">Role</SortHeader>
             </TableHead>
-            <TableHead className="w-[14%]">
+            <TableHead className="w-[12%]">
               <SortHeader column="company">Company</SortHeader>
             </TableHead>
-            <TableHead className="w-[15%]">Location</TableHead>
+            <TableHead className="w-[12%]">Location</TableHead>
             <TableHead className="w-[8%]">Type</TableHead>
-            <TableHead className="w-[9%]">
+            <TableHead className="w-[6%]">
               <SortHeader column="source">Source</SortHeader>
             </TableHead>
-            <TableHead className="w-[11%] text-right">
+            <TableHead className="w-[10%] text-right">
               <SortHeader column="posted" align="right">
                 Posted
               </SortHeader>
             </TableHead>
-            <TableHead className="w-[7%] text-right">
+            <TableHead className="w-[6%] text-right">
               <SortHeader column="seen" align="right">
                 Seen
               </SortHeader>
             </TableHead>
+            <TableHead className="w-[3%]" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {jobs.map((j) => (
-            <TableRow key={`${j.ats}:${j.slug}:${j.external_id}`} className="group">
+          {visible.map((j) => {
+            const key = jobKey(j);
+            const isApplied = applied.has(key);
+            return (
+            <TableRow
+              key={key}
+              className={`group ${isApplied ? "opacity-45" : ""}`}
+            >
+              <TableCell>
+                <Checkbox
+                  checked={isApplied}
+                  onCheckedChange={() => toggleApplied(key)}
+                  aria-label={`Mark ${j.title} as applied`}
+                />
+              </TableCell>
               <TableCell className="py-2.5">
                 {j.url ? (
                   <Link
@@ -158,10 +200,32 @@ export function JobTable({ jobs }: { jobs: Job[] }) {
               <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
                 {ago(j.first_seen_at)}
               </TableCell>
+              <TableCell className="text-right">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="size-7 p-0 opacity-30 transition-opacity group-hover:opacity-80 data-[state=open]:opacity-100"
+                      aria-label="Row actions"
+                    >
+                      <MoreHorizontal className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem onClick={() => dismiss(key)}>
+                      <EyeOff className="size-3.5" />
+                      Hide this role
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </TableCell>
             </TableRow>
-          ))}
+            );
+          })}
         </TableBody>
       </Table>
+      </div>
     </div>
   );
 }
