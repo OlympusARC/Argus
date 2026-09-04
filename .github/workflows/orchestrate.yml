@@ -1,0 +1,66 @@
+name: orchestrate
+
+# Lane B: the brain. Cron holds the cadence; the policy holds the decision.
+#
+# Runs alongside discover.yml deliberately, not instead of it. Until the
+# orchestrator has spent a week choosing sensibly, the fixed daily sweep stays
+# as the floor -- and the two are compared before the old workflow is deleted.
+#
+# Shares the `pipeline` concurrency group with poll, so Lane B can never overlap
+# the feed and steal an ATS's rate limit. discover.yml now has its own group.
+#
+# 09:00 rather than 03:00, which is when discover runs. Two reasons. It no longer
+# competes with a job that can occupy four hours; and arriving after discovery
+# means `hours_since_discover` is ~6 when the policy reads it, so rule 7 does not
+# fire and the orchestrator spends its budget on validate, resolve and the agents
+# instead of repeating the sweep that just finished.
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the plan without running anything"
+        type: boolean
+        default: false
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  orchestrate:
+    runs-on: ubuntu-latest
+    # The budget below is 45 minutes: the gap is the margin the orchestrator
+    # needs to finish recording and exit cleanly rather than be killed.
+    timeout-minutes: 50
+    env:
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_REF: ${{ secrets.SUPABASE_REF }}
+      SUPABASE_REGION: ${{ secrets.SUPABASE_REGION }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Lane B's whole point. Without it agents/{classifier,prospector,healer}
+      # return {"skipped": "no LLM provider configured"}, the graph records the
+      # refusal and stops offering them, and the run does nothing a cron could
+      # not. Deliberately not set on poll.yml: argus classify is rules-only and
+      # makes no model calls.
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[postgres,orchestrator]'
+
+      - name: Plan
+        run: argus orchestrate --dry-run --budget 45
+
+      - name: Run
+        if: ${{ inputs.dry_run != true }}
+        run: argus orchestrate --budget 45
+
+      - name: Source health
+        if: always()
+        continue-on-error: true
+        run: argus health

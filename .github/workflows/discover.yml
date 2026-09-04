@@ -1,0 +1,97 @@
+name: discover
+
+# Discovery, careers resolution and validation, daily. One workflow rather
+# than three schedules, because each step consumes what the one before it
+# produced: discover creates unvalidated boards, resolve drains the company
+# backlog, validate settles the boards. Resolve is capped because that
+# backlog is thousands deep and every probe hits an unrelated company's site.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: "Limit to these sources, e.g. -s jobjson -s simplify"
+        required: false
+        default: ""
+      crawls:
+        description: "Common Crawl collections to sweep (daily uses 1)"
+        required: false
+        default: "1"
+
+# Its own group, not the feed's.
+#
+# GitHub keeps at most one *pending* run per concurrency group and cancels the
+# older one, so while this job held `pipeline` for its 240-minute ceiling the
+# queued polls collapsed into a single run -- a long discovery silently cost
+# most of a day's reconciles.
+#
+# The reason it shared the group was per-host rate limits: http.host_slot is an
+# in-process semaphore, so two processes touching one ATS double its limit. That
+# still applies to the validate step, which probes boards. It is the lesser
+# problem: validate is a small share of this workflow (the bulk is Common Crawl,
+# GitHub and urlscan, which the feed never touches), and the poll lane now idles
+# seventy minutes in every two hours.
+concurrency:
+  group: discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    # Sized from a measured run, not a guess. Discover at one Common Crawl
+    # collection is ~33 minutes; validating a fresh 26,710-board backlog in
+    # parallel is ~25. The worst case only happens the day after a large
+    # sweep -- steady state is well under an hour. 240 leaves margin inside
+    # the six-hour ceiling without letting a hung job sit there all day.
+    timeout-minutes: 240
+    env:
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_REF: ${{ secrets.SUPABASE_REF }}
+      SUPABASE_REGION: ${{ secrets.SUPABASE_REGION }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Not a key -- a name and email that EDGAR requires in the User-Agent
+      # under its fair-access policy. A generic library agent gets 403.
+      ARGUS_SEC_CONTACT: ${{ secrets.ARGUS_SEC_CONTACT }}
+      # websearch's backend. TinyFish's /search and /fetch are brokered by
+      # Monid and metered at $0, so this costs nothing but a key -- and
+      # without it the source reports unavailable and the sweep yields
+      # nothing at all.
+      MONID_API_KEY: ${{ secrets.MONID_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[postgres]'
+      # One Common Crawl collection, not the default four. Common Crawl
+      # publishes roughly monthly and the sweep has no memory of what it
+      # already read, so four collections daily re-fetches the same three
+      # about thirty times each to find the one that is new. Measured: four
+      # collections is ~16 minutes of a 45-minute run. Sweep the back
+      # catalogue by dispatching this workflow with crawls: 4.
+      - name: Discover boards and companies
+        run: |
+          argus discover ${{ github.event.inputs.sources }} \
+            --crawls "${{ github.event.inputs.crawls || 1 }}"
+      - name: Resolve careers pages
+        run: argus companies --resolve --limit 2000
+      # In parallel, because the pacing is per host and each ATS is a
+      # different one -- they do not contend. Run in sequence this was the
+      # sum of every ATS; in parallel it is the slowest single one. Measured
+      # on 26,710 boards: ~95 minutes sequential against ~25 in parallel.
+      #
+      # Two waves rather than one: eight concurrent validators saturate the
+      # runner's outbound connections, and a slow host in the first wave
+      # then delays every other ATS rather than just itself.
+      - name: Validate newly discovered boards
+        run: |
+          for ats in greenhouse workday ashby bamboohr breezy; do
+            argus validate --ats "$ats" --limit 4000 --workers 12 &
+          done
+          wait
+          for ats in smartrecruiters recruitee lever; do
+            argus validate --ats "$ats" --limit 4000 --workers 12 &
+          done
+          wait

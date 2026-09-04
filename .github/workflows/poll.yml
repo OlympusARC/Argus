@@ -1,0 +1,67 @@
+name: poll
+
+# The reconcile, every two hours. This is what produces new-job events.
+#
+# A full sweep of the registry takes ~50 minutes, so hourly leaves ten minutes
+# of headroom and two-hourly leaves seventy. The alternative was demoting quiet
+# boards to a longer tier, which shrinks the sweep but makes freshness uneven --
+# a board silent for a fortnight that then posts something good is exactly the
+# case worth catching promptly. Uniform two-hourly gives a worse best case and a
+# much better worst case, and needs no heuristic about which boards matter.
+#
+# One runner, deliberately. http.host_slot caps per-host concurrency with an
+# in-process semaphore, so a second concurrent runner would silently double
+# every ATS's rate limit -- we already produced 709 HTTP 429s from Workday by
+# over-driving a single process.
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_REF: ${{ secrets.SUPABASE_REF }}
+      SUPABASE_REGION: ${{ secrets.SUPABASE_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[postgres]'
+      - name: Reconcile due boards
+        run: |
+          # Cheap ATSs first, Workday last. Workday paginates at 20 postings
+          # per request and averages 183 per board, so it is an order of
+          # magnitude slower than the rest -- and polling it first meant it
+          # consumed the whole 50-minute window and the other eight never ran
+          # at all. Last, it simply takes whatever time is left.
+          for ats in ashby greenhouse lever smartrecruiters breezy recruitee bamboohr; do
+            argus poll --ats "$ats" --workers 10
+          done
+
+          # Fewer workers than the others on purpose: 20 earned 709 rate-limit
+          # responses from Workday. The limit bounds one run rather than the
+          # backlog -- boards are polled most-overdue first and next_poll_at
+          # persists, so what does not fit here is simply the next run's work.
+          argus poll --ats workday --workers 6 --limit 400
+      - name: Classify anything the ruleset has not seen
+        run: argus classify
+
+      # Last, and deliberately not `needs`-gated on anything: the digest
+      # reports what the reconcile above actually wrote. Classification runs
+      # first because the digest filters on is_engineering, which classify is
+      # what sets. No webhook configured is not an error -- the step prints
+      # what it would have sent and exits 0.
+      - name: Post the hourly digest
+        env:
+          ARGUS_DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: argus notify
