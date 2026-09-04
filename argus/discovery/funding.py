@@ -74,6 +74,12 @@ class FundingSource(Source):
         """
         Verified: EDGAR 403s a generic agent and 200s one carrying an email.
         Better to say so than to fail mid-run.
+
+        The check is only that an address is present, because the rest is not
+        ours to judge -- but note EDGAR blocks some domains outright. A
+        @users.noreply.github.com address 403s exactly like the generic agent
+        does, which reads as "the contact is not set" when in fact it is set
+        and refused. Anything ordinary, example.com included, is accepted.
         """
         if "@" not in (self.contact or ""):
             return False, (
