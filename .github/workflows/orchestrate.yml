@@ -16,7 +16,7 @@ name: orchestrate
 # instead of repeating the sweep that just finished.
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "17 9 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

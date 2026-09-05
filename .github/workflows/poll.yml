@@ -26,7 +26,15 @@ name: poll
 # Measured on three ATSs at 300 boards: 284s serial against 180s parallel.
 on:
   schedule:
-    - cron: "0 * * * *"
+  # Deliberately not on the hour. GitHub's own documentation says the
+  # schedule event is delayed under load, that "high load times include the
+  # start of every hour", and that "if the load is sufficiently high enough,
+  # some queued jobs may be dropped".
+  #
+  # Measured on `0 * * * *`: seven runs in twenty-four hours against
+  # twenty-four scheduled, with gaps of 2.4 to 5.0 hours and not one firing
+  # near :00. That is not lateness, it is roughly 70% of fires discarded.
+    - cron: "37 * * * *"
   workflow_dispatch:
 
 concurrency:
