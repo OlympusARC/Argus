@@ -26,20 +26,15 @@ name: poll
 # Measured on three ATSs at 300 boards: 284s serial against 180s parallel.
 on:
   schedule:
-  # A backstop, not the schedule. The hourly trigger is an external cron
-  # calling workflow_dispatch, because GitHub's own scheduler could not be
-  # made to keep time: measured on `0 * * * *`, seven runs fired in
-  # twenty-four hours against twenty-four scheduled, with gaps of 2.4 to 5.0
-  # hours. GitHub documents this -- the schedule event is delayed under load,
-  # "high load times include the start of every hour", and "if the load is
-  # sufficiently high enough, some queued jobs may be dropped".
+  # Deliberately not on the hour. GitHub's own documentation says the
+  # schedule event is delayed under load, that "high load times include the
+  # start of every hour", and that "if the load is sufficiently high enough,
+  # some queued jobs may be dropped".
   #
-  # This entry stays so a dead external scheduler degrades to four polls a
-  # day rather than none, which is the failure that would otherwise be
-  # silent. :43 rather than :00 for the reason above. The concurrency group
-  # makes a collision with the external trigger harmless -- one runs, the
-  # other queues or is dropped, and neither doubles an ATS's rate limit.
-    - cron: "43 */6 * * *"
+  # Measured on `0 * * * *`: seven runs in twenty-four hours against
+  # twenty-four scheduled, with gaps of 2.4 to 5.0 hours and not one firing
+  # near :00. That is not lateness, it is roughly 70% of fires discarded.
+    - cron: "37 * * * *"
   workflow_dispatch:
 
 concurrency:

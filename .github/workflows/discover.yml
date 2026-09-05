@@ -7,12 +7,7 @@ name: discover
 # backlog is thousands deep and every probe hits an unrelated company's site.
 on:
   schedule:
-  # A backstop, not the schedule. The hourly and daily triggers come from a
-  # Cloudflare Worker calling workflow_dispatch, because GitHub's scheduler
-  # dropped roughly 70% of its fires -- measured, and documented by GitHub as
-  # expected under load. Weekly here so a dead Worker degrades to something
-  # rather than to silence, which is the failure that produces no error.
-    - cron: "43 5 * * 0"
+    - cron: "43 3 * * *"
   workflow_dispatch:
     inputs:
       sources:
