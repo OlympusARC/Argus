@@ -1,0 +1,12 @@
+name = "argus-trigger"
+main = "worker.js"
+compatibility_date = "2026-09-05"
+
+# Three of the five cron triggers a free account gets. None on :00 -- see
+# worker.js. Cron Triggers run on UTC, which is what the workflows assume.
+[triggers]
+crons = [
+  "37 * * * *",   # poll
+  "43 3 * * *",   # discover
+  "17 9 * * *",   # orchestrate
+]

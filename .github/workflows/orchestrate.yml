@@ -16,7 +16,12 @@ name: orchestrate
 # instead of repeating the sweep that just finished.
 on:
   schedule:
-    - cron: "17 9 * * *"
+  # A backstop, not the schedule. The hourly and daily triggers come from a
+  # Cloudflare Worker calling workflow_dispatch, because GitHub's scheduler
+  # dropped roughly 70% of its fires -- measured, and documented by GitHub as
+  # expected under load. Weekly here so a dead Worker degrades to something
+  # rather than to silence, which is the failure that produces no error.
+    - cron: "17 11 * * 0"
   workflow_dispatch:
     inputs:
       dry_run:
